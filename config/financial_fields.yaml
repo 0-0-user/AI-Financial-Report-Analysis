@@ -1,0 +1,85 @@
+# B0 层：财务字段统一映射表
+# standard_name: 系统标准字段名
+# chinese_variants: 财报中常见的中文写法变体
+
+fields:
+  Revenue_Total:
+    chinese_variants:
+      - "营业收入"
+      - "营业总收入"
+      - "主营业务收入"
+      - "营收"
+      - "销售收入"
+    type: "profit_loss"
+    description: "营业收入（总收入）"
+
+  Cost_Revenue:
+    chinese_variants:
+      - "营业成本"
+      - "主营业务成本"
+    type: "profit_loss"
+    description: "营业成本"
+
+  Gross_Profit:
+    chinese_variants:
+      - "毛利润"
+      - "毛利"
+    type: "profit_loss"
+    description: "毛利润"
+
+  Net_Profit:
+    chinese_variants:
+      - "净利润"
+      - "归母净利润"
+      - "归属于母公司股东的净利润"
+      - "扣非净利润"
+    type: "profit_loss"
+    description: "净利润"
+
+  Total_Assets:
+    chinese_variants:
+      - "资产总计"
+      - "总资产"
+      - "资产总额"
+    type: "balance_sheet"
+    description: "资产总计"
+
+  Total_Liabilities:
+    chinese_variants:
+      - "负债合计"
+      - "总负债"
+      - "负债总额"
+      - "负债总计"
+    type: "balance_sheet"
+    description: "负债合计"
+
+  Equity_Total:
+    chinese_variants:
+      - "所有者权益合计"
+      - "股东权益合计"
+      - "净资产合计"
+      - "归属于母公司所有者权益合计"
+    type: "balance_sheet"
+    description: "所有者权益合计"
+
+  Monetary_Funds:
+    chinese_variants:
+      - "货币资金"
+      - "货币资金期末余额"
+    type: "balance_sheet"
+    description: "货币资金"
+
+  Operating_Cash_Flow:
+    chinese_variants:
+      - "经营活动产生的现金流量净额"
+      - "经营活动现金流量净额"
+      - "经营现金流净额"
+    type: "cashflow"
+    description: "经营活动现金流量净额"
+
+  Operating_Cash_Inflow:
+    chinese_variants:
+      - "销售商品、提供劳务收到的现金"
+      - "销售商品收到的现金"
+    type: "cashflow"
+    description: "销售商品收到的现金"

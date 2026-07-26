@@ -1,0 +1,31 @@
+# A1 层：行业标签体系定义
+
+hard_tags:
+  - name: "同花顺三级行业"
+    description: "同花顺行业分类标准，精确到三级"
+    source: "同花顺 iFinD"
+
+soft_tags:
+  - name: "资产结构"
+    options: ["重资产", "轻资产", "混合"]
+    description: "固定资产占总资产比重"
+
+  - name: "毛利率水平"
+    options: ["高毛利", "中等毛利", "低毛利"]
+    description: "行业平均毛利率水平"
+
+  - name: "客户类型"
+    options: ["To-B", "To-C", "To-G"]
+    description: "主要客户群体"
+
+  - name: "竞争壁垒"
+    options: ["品牌护城河", "技术壁垒", "规模效应", "特许经营", "无明显壁垒"]
+    description: "核心竞争壁垒类型"
+
+  - name: "现金流特征"
+    options: ["奶牛型", "烧钱型", "平衡型"]
+    description: "经营性现金流特征"
+
+  - name: "生命周期"
+    options: ["初创期", "成长期", "成熟期", "衰退期"]
+    description: "行业发展阶段"

@@ -1,0 +1,31 @@
+name: d1_hypothesis
+description: "基于宏观事实和行业标签推演异常原因的假设"
+
+messages:
+  - role: system
+    content: |
+      你是商业分析师。你的任务是不看年报原文，仅基于外部宏观信息和行业常识，
+      发散出几种合理的假设来解释财务指标的异常变化。
+
+      规则：
+      1. 每种假设必须有明确的推演逻辑
+      2. 假设之间应是互斥的（归因于不同原因）
+      3. 标注每条假设依赖的依据来源
+      4. 最多输出 4 种假设
+
+  - role: user
+    content: |
+      异常指标：{{indicator}}
+      偏离程度：{{deviation}}
+
+      宏观背景事实：
+      {{macro_facts}}
+
+      行业标签：
+      {{industry_tags}}
+
+      请输出：
+      [
+        {"hypothesis": "假设A", "reasoning": "...", "source": "宏观事实"},
+        {"hypothesis": "假设B", "reasoning": "...", "source": "行业标签"}
+      ]

@@ -1,0 +1,31 @@
+name: d2_probability
+description: "结合双路径结果分配概率"
+
+messages:
+  - role: system
+    content: |
+      你是风险评估专家。你的任务是将路1（原文解释）和路2（推演假设）的结果结合起来，
+      对每个异常给出具体的概率分配。
+
+      规则：
+      1. 所有概率加起来必须等于 100%
+      2. 如果路1有明确的原文解释且路2无冲突，原文解释的归因概率应较高
+      3. 如果路1无直接解释，以路2的假设为主
+      4. "其他"类概率不超过 20%
+
+  - role: user
+    content: |
+      异常指标：{{indicator}}
+      异常来源：{{source}} (B+/C)
+
+      路1结果（原文解释）：
+      {{lookup_results}}
+
+      路2结果（推演假设）：
+      {{hypothesis_results}}
+
+      请输出：
+      {
+        "probabilities": {"原因A": 0.6, "原因B": 0.3, "其他": 0.1},
+        "reasoning_summary": "综合判断依据"
+      }

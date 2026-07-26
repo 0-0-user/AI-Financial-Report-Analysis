@@ -1,0 +1,21 @@
+# B+ / C 层：异常判定阈值
+
+bplus:
+  净现比:
+    normal_range: [0.6, 2.0]
+    severe_threshold: 0.0
+
+  收现比:
+    normal_range: [0.6, 1.5]
+    severe_threshold: 0.3
+
+  存贷双高:
+    both_above: 0.3
+
+  母子资金分离度:
+    severe_ratio: 0.3
+    warning_ratio: 0.15
+
+c_layer:
+  mad_threshold: 2.0
+  extreme_threshold: 5.0

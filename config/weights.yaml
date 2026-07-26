@@ -1,0 +1,52 @@
+# E1 层：指标基础影响权重库
+# base_weight: 正数=利好，负数=利空
+# direction: positive（偏离大=好事） / negative（偏离大=坏事）
+
+weights:
+  存货周转率:
+    category: "营运能力"
+    base_weight: -1
+    direction: "negative"
+    amplification_cap: 3.0
+
+  应收账款周转率:
+    category: "营运能力"
+    base_weight: -1
+    direction: "negative"
+    amplification_cap: 3.0
+
+  毛利率:
+    category: "盈利能力"
+    base_weight: 1
+    direction: "positive"
+    amplification_cap: 2.0
+
+  净利率:
+    category: "盈利能力"
+    base_weight: 1
+    direction: "positive"
+    amplification_cap: 2.0
+
+  资产负债率:
+    category: "偿债能力"
+    base_weight: -1
+    direction: "negative"
+    amplification_cap: 2.5
+
+  流动比率:
+    category: "偿债能力"
+    base_weight: 1
+    direction: "positive"
+    amplification_cap: 2.0
+
+  营业收入增长率:
+    category: "成长能力"
+    base_weight: 1
+    direction: "positive"
+    amplification_cap: 3.0
+
+  净利润增长率:
+    category: "成长能力"
+    base_weight: 1
+    direction: "positive"
+    amplification_cap: 3.0

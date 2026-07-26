@@ -1,0 +1,33 @@
+# 环境变量
+.env
+*.key
+
+# 数据文件
+data/raw/*
+data/processed/*
+data/outputs/*
+!data/benchmarks/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# 大文件
+*.pdf
+*.csv
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 操作系统
+Thumbs.db
+.DS_Store
+
+# Notebook 检查点
+.ipynb_checkpoints/

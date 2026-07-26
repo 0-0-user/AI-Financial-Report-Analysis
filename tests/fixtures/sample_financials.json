@@ -1,0 +1,67 @@
+{
+  "company_name": "贵州茅台",
+  "stock_code": "600519",
+  "year": 2024,
+  "report_type": "合并报表",
+  "balance_sheet": {
+    "Total_Assets": {
+      "standard_name": "Total_Assets",
+      "raw_name": "资产总计",
+      "value": 250000000000,
+      "original_unit": "元",
+      "report_type": "合并报表"
+    },
+    "Total_Liabilities": {
+      "standard_name": "Total_Liabilities",
+      "raw_name": "负债合计",
+      "value": 50000000000,
+      "original_unit": "元",
+      "report_type": "合并报表"
+    },
+    "Equity_Total": {
+      "standard_name": "Equity_Total",
+      "raw_name": "所有者权益合计",
+      "value": 200000000000,
+      "original_unit": "元",
+      "report_type": "合并报表"
+    },
+    "Monetary_Funds": {
+      "standard_name": "Monetary_Funds",
+      "raw_name": "货币资金",
+      "value": 80000000000,
+      "original_unit": "元",
+      "report_type": "合并报表"
+    }
+  },
+  "income_statement": {
+    "Revenue_Total": {
+      "standard_name": "Revenue_Total",
+      "raw_name": "营业收入",
+      "value": 150000000000,
+      "original_unit": "元",
+      "report_type": "合并报表"
+    },
+    "Net_Profit": {
+      "standard_name": "Net_Profit",
+      "raw_name": "净利润",
+      "value": 75000000000,
+      "original_unit": "元",
+      "report_type": "合并报表"
+    }
+  },
+  "cashflow": {
+    "Operating_Cash_Flow": {
+      "standard_name": "Operating_Cash_Flow",
+      "raw_name": "经营活动产生的现金流量净额",
+      "value": 70000000000,
+      "original_unit": "元",
+      "report_type": "合并报表"
+    }
+  },
+  "validation": {
+    "is_valid": true,
+    "checks": [
+      {"check_name": "资产负债表恒等式", "passed": true, "detail": "资产=负债+权益 成立"}
+    ]
+  }
+}

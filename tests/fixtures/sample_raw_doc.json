@@ -1,0 +1,34 @@
+{
+  "metadata": {
+    "file_name": "600519_2024.pdf",
+    "page_count": 256,
+    "extract_date": "2026-07-26"
+  },
+  "financial_data": {
+    "balance_sheet": [],
+    "income_statement": [],
+    "cashflow_statement": []
+  },
+  "management_discussion": {
+    "sections": [
+      {
+        "title": "经营情况讨论与分析",
+        "content": "报告期内，公司实现营业收入1,500亿元...",
+        "page_number": 15
+      }
+    ]
+  },
+  "footnotes": {
+    "items": [
+      {
+        "name": "存货",
+        "content": "存货期末余额较期初增加20%，主要系...",
+        "page_number": 85
+      }
+    ]
+  },
+  "company_overview": {
+    "business_description": "贵州茅台酒股份有限公司主营业务为茅台酒及系列酒的生产与销售。",
+    "industry_classification": "白酒"
+  }
+}

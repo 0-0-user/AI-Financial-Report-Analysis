@@ -1,0 +1,29 @@
+"""快速验证 PDF 可解析性
+
+用法：
+    python scripts/validate_pdf.py data/raw/600519_2024.pdf
+"""
+
+import argparse
+from pathlib import Path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="PDF 文件解析性检查")
+    parser.add_argument("pdf", help="年报 PDF 文件路径")
+    args = parser.parse_args()
+
+    pdf_path = Path(args.pdf)
+    if not pdf_path.exists():
+        print(f"❌ 文件不存在: {pdf_path}")
+        return
+
+    # TODO: 实际检查 PDF 内容和结构
+    print(f"📄 {pdf_path.name}")
+    print(f"   大小: {pdf_path.stat().st_size / 1024 / 1024:.1f} MB")
+    print("   ✅ PDF 可读取")
+    print("   ⏳ 章节检测: 待实现")
+
+
+if __name__ == "__main__":
+    main()

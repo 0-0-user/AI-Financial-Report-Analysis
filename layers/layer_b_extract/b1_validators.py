@@ -49,7 +49,7 @@ def _check_balance_sheet_equation(financials: FinancialStatement) -> ValidationC
 
     assets = bs.get("Total_Assets")
     liabilities = bs.get("Total_Liabilities")
-    equity = bs.get("Equity_Total")
+    equity = bs.get("Total_Equity")
 
     if not assets or not liabilities or not equity:
         return ValidationCheck(

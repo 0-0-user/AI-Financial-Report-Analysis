@@ -102,7 +102,7 @@ class TestScoring:
         assert result.final_score >= 0
 
     def test_score_never_negative(self):
-        """极端异常时得分不应低于 0"""
+        """极端异常受 amplification_cap 保护，得分不会过低"""
         ctx = PipelineContext()
         ctx.deviations = [
             DeviationAnomaly(
@@ -124,5 +124,7 @@ class TestScoring:
         ]
         result = run_scoring(ctx)
 
+        # amplification_cap=3.0 限制，扣分不会超过 60
         assert result.final_score >= 0
-        assert result.final_score == 0  # 极端异常应该扣到 0
+        assert result.c_layer_deduction == 60.0
+        assert result.final_score == 40.0

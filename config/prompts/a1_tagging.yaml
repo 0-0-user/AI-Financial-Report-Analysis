@@ -1,3 +1,22 @@
+# ==========================================================
+# config/prompts/a1_tagging.yaml — A1 层：行业标签分类
+# ==========================================================
+#
+# 本 prompt 用于 A1 层。LLM 根据公司基本信息和业务描述，
+# 按 industry_tags.yaml 定义的标签体系打定性标签。
+#
+# 硬标签：从同花顺三级行业分类中选择（客观分类）
+# 软标签：从给定选项中选择（商业模式特征）
+#
+# 模板变量：
+#   company_name:       公司名称
+#   business_description: 公司主营业务描述（来自年报原文）
+#   soft_tags:          软标签维度列表（从 industry_tags.yaml 加载）
+#
+# 输出格式：JSON（包含硬标签 + 软标签列表）
+#
+# 被谁使用：layers/layer_a_benchmark/a1_tagging.py
+
 name: a1_tagging
 description: "给公司打行业定性标签"
 

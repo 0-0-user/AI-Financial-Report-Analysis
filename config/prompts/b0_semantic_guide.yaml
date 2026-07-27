@@ -1,3 +1,22 @@
+# ==========================================================
+# config/prompts/b0_semantic_guide.yaml — B0 层：表头语义识别
+# ==========================================================
+#
+# 本 prompt 用于 B0 层。LLM 只读财务报表的【表头文字】，
+# 不接触任何数值数据，输出结构化的字段映射指引。
+#
+# 核心输出：
+#   - table_name:    报表名称（资产负债表/利润表/现金流量表）
+#   - report_type:   合并报表 / 母公司报表
+#   - unit:          整体单位（元/万元/千元）
+#   - columns:       列名映射（如 year/end_balance/begin_balance）
+#   - field_mapping: 字段名到标准名的映射 + 位置坐标
+#
+# 模板变量：
+#   table_headers: 表格的表头文字（不含数据行）
+#
+# 被谁使用：layers/layer_b_extract/b0_semantic_guide.py
+
 name: b0_semantic_guide
 description: "识别报表表头，做字段映射和单位提取"
 

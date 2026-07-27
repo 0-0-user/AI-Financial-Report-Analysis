@@ -1,6 +1,22 @@
-# B0 层：财务字段统一映射表
-# standard_name: 系统标准字段名
-# chinese_variants: 财报中常见的中文写法变体
+# ==========================================================
+# config/financial_fields.yaml — B0 层：财务字段统一映射表
+# ==========================================================
+#
+# 本文件定义了财报中各种中文写法到系统标准字段名的映射关系。
+# B0 层（LLM 表头识别）将原始报表中的中文表头映射到统一的标准名，
+# B1 层（代码提取）再根据标准名定位取值。
+#
+# 一条字段映射包含：
+#   standard_name:   系统内部使用的标准字段名（如 Revenue_Total）
+#   chinese_variants: 中文财报中可能出现的各种写法
+#   type:            所属报表类型（profit_loss/balance_sheet/cashflow）
+#   description:     字段含义说明
+#
+# 由谁维护：开发 + 分析师（发现新的中文写法时补充）
+# 被谁使用：B0 层（layers/layer_b_extract/b0_semantic_guide.py）
+#
+# 提示：如果 LLM 在年报中遇到未列出的字段名，会返回原始名称
+# 并记录警告，后续补充到这里即可。
 
 fields:
   Revenue_Total:

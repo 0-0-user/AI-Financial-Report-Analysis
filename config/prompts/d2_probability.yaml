@@ -1,3 +1,26 @@
+# ==========================================================
+# config/prompts/d2_probability.yaml — D2 层：概率分配
+# ==========================================================
+#
+# 本 prompt 用于 D2 层。LLM 将 D1 层两路结果结合起来，
+# 对每个异常给出具体的概率化归因。
+#
+# 核心规则：
+#   1. 所有概率加起来必须等于 100%
+#   2. 路1有明确原文解释且路2无冲突 → 原文归因概率高
+#   3. 路1无直接解释 → 以路2假设为主
+#   4. "其他"类概率不超过 20%
+#
+# 模板变量：
+#   indicator:         异常指标名
+#   source:            异常来源（B+ / C）
+#   lookup_results:    路1结果（原文解释）
+#   hypothesis_results: 路2结果（推演假设）
+#
+# 输出格式：JSON（probabilities + reasoning_summary）
+#
+# 被谁使用：layers/layer_d_reasoning/d2_probability.py
+
 name: d2_probability
 description: "结合双路径结果分配概率"
 

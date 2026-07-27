@@ -1,4 +1,22 @@
-# B+ / C 层：异常判定阈值
+# ==========================================================
+# config/thresholds.yaml — B+ / C 层：异常判定阈值
+# ==========================================================
+#
+# 本文件定义了系统检测异常时的判定阈值。
+#
+# B+ 层阈值（逻辑检查）：
+#   净现比 / 收现比：比值低于 normal_range 下限时标记为异常，
+#   低于 severe_threshold 时标记为严重
+#   存贷双高：货币资金/总资产 和 有息负债/总资产 都超过 both_above
+#   母子资金分离：分离度超过 severe_ratio 为严重，超过 warning_ratio 为警告
+#
+# C 层阈值（MAD 偏离度）：
+#   mad_threshold: 偏离超过此值标记为"异常"
+#   extreme_threshold: 偏离超过此值标记为"极端异常"
+#
+# 由谁维护：分析师（可根据行业特性调整阈值）
+# 被谁使用：B+ 层（layers/layer_bplus_internal/logic_checks.py）
+#          C 层（layers/layer_c_deviation/mad_calculator.py）
 
 bplus:
   净现比:

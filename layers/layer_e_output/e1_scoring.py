@@ -45,8 +45,10 @@ def _calc_c_layer_deduction(ctx: PipelineContext) -> float:
         base_weight = -1.0  # 默认利空权重
         effective_weight = base_weight * (1 + dev.mad_multiple / 3)
 
+        # 概率加权求和（所有 p 加起来 = 1.0）
+        expected_impact = 0.0
         for cause, p in prob.probabilities.items():
-            expected_impact = p * effective_weight
+            expected_impact += p * effective_weight
 
         deduction += expected_impact * dev.mad_multiple
 

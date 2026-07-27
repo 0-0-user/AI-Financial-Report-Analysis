@@ -31,9 +31,12 @@ class TestPromptLoader:
     def test_render_with_variables(self):
         """模板渲染应正确填充变量"""
         loader = PromptLoader("config/prompts")
-        result = loader.render("a0_macro_search", {
+        messages = loader.render("a0_macro_search", {
             "search_query": "test",
             "search_results": "result_data",
         })
-        assert "test" in result
-        assert "result_data" in result
+        # render() 返回 list[dict]，每条含 role 和 content
+        assert len(messages) > 0
+        all_text = " ".join(m["content"] for m in messages)
+        assert "test" in all_text
+        assert "result_data" in all_text

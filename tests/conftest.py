@@ -28,11 +28,11 @@ def sample_financials() -> FinancialStatement:
     """返回一份干净的测试用财务数据"""
     fixture_path = FIXTURES_DIR / "sample_financials.json"
     if fixture_path.exists():
-        with open(fixture_path) as f:
+        with open(fixture_path, encoding="utf-8") as f:
             data = json.load(f)
         return FinancialStatement.model_validate(data)
 
-    # 返回默认 mock 数据
+    # 返回默认 mock 数据（含三大报表字段）
     return FinancialStatement(
         company_name="测试公司",
         stock_code="000000",
@@ -42,6 +42,14 @@ def sample_financials() -> FinancialStatement:
             "Total_Assets": FinancialField(
                 standard_name="Total_Assets", raw_name="资产总计",
                 value=100_000_000, original_unit="元", report_type="合并报表",
+            ),
+            "Total_Liabilities": FinancialField(
+                standard_name="Total_Liabilities", raw_name="负债合计",
+                value=60_000_000, original_unit="元", report_type="合并报表",
+            ),
+            "Total_Equity": FinancialField(
+                standard_name="Total_Equity", raw_name="所有者权益合计",
+                value=40_000_000, original_unit="元", report_type="合并报表",
             ),
         },
         income_statement={},

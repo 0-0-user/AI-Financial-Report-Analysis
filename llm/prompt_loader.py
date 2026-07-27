@@ -44,8 +44,11 @@ class PromptLoader:
         self._cache[name] = prompt_data
         return prompt_data
 
-    def render(self, name: str, variables: dict) -> str:
-        """加载并渲染 prompt 模板"""
+    def render(self, name: str, variables: dict) -> list[dict]:
+        """加载并渲染 prompt 模板，返回适合 API 调用的消息列表
+
+        每一条消息格式: {"role": "system"/"user"/"assistant", "content": "..."}
+        """
         prompt_data = self.load(name)
         messages = prompt_data.get("messages", [])
 
@@ -55,4 +58,4 @@ class PromptLoader:
             rendered_content = template.render(**variables)
             rendered.append({"role": msg["role"], "content": rendered_content})
 
-        return str(rendered)
+        return rendered

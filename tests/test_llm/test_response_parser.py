@@ -41,6 +41,6 @@ class TestFactsExtraction:
 
     def test_extract_facts(self):
         """从文本中提取事实条目"""
-        text = "- 事实一\n- 事实二\n- 事实三"
+        text = "- 光伏硅料价格2025年下跌40%\n- 房地产销售面积同比下滑15%\n- 白酒行业毛利率维持在75%以上"
         facts = ResponseParser.extract_facts(text)
         assert len(facts) == 3

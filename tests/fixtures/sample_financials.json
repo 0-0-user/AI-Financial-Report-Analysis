@@ -18,8 +18,8 @@
       "original_unit": "元",
       "report_type": "合并报表"
     },
-    "Equity_Total": {
-      "standard_name": "Equity_Total",
+    "Total_Equity": {
+      "standard_name": "Total_Equity",
       "raw_name": "所有者权益合计",
       "value": 200000000000,
       "original_unit": "元",

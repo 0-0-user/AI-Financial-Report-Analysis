@@ -1,4 +1,13 @@
-"""C层MAD算法单元测试"""
+"""
+==========================================================
+ tests/test_layers/test_c_mad.py — MAD 算法测试
+==========================================================
+
+测试 C 层中位数绝对偏差（MAD）算法的正确性：
+- 正常数据下 MAD 应对极端值稳健（不受单个异常值影响）
+- 全相同值时 MAD 应为 0
+- 大幅偏离中位数的值应被正确检测为异常
+"""
 
 import pytest
 from layers.layer_c_deviation.mad_calculator import calc_mad, calc_deviation_multiple

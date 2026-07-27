@@ -1,11 +1,23 @@
-"""pytest 共享 fixtures"""
+"""
+==========================================================
+ tests/conftest.py — 共享测试夹具
+==========================================================
+
+pytest 的共享 fixtures 定义文件。
+
+提供各层测试通用的 mock 数据：
+- sample_financials:  一份干净的测试用财务数据（直接从JSON加载或返回默认mock）
+- mock_benchmark:     包含同行中位数和历史均值的基准 mock
+
+fixtures 目录（tests/fixtures/）中包含更完整的测试数据文件。
+"""
 
 import json
 import pytest
 from pathlib import Path
 
-from schemas.financial import FinancialStatement, FinancialField, ValidationResult
-from schemas.benchmark import Benchmark
+from schemas.financial import FinancialStatement, FinancialField, ValidationResult, ValidationCheck
+from schemas.benchmark import IndustryProfile, Benchmark
 
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -34,7 +46,7 @@ def sample_financials() -> FinancialStatement:
         },
         income_statement={},
         cashflow={},
-        validation=ValidationResult(is_valid=True, checks=[{"passed": True}]),
+        validation=ValidationResult(is_valid=True, checks=[ValidationCheck(check_name="test", passed=True, detail="")]),
     )
 
 
@@ -42,6 +54,7 @@ def sample_financials() -> FinancialStatement:
 def mock_benchmark() -> Benchmark:
     """返回 mock 同行基准数据"""
     return Benchmark(
+        industry=IndustryProfile(industry_name="测试行业"),
         peer_median={"存货周转率": 0.5, "毛利率": 0.4},
         historical_mean={"存货周转率": 0.45, "毛利率": 0.38},
         peer_companies=[],

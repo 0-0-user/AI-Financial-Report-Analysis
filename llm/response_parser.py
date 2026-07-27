@@ -1,4 +1,22 @@
-"""解析 LLM 输出为结构化数据"""
+"""
+==========================================================
+ llm/response_parser.py — LLM 输出解析器
+==========================================================
+
+大模型返回的内容通常不是完美的 JSON，可能有以下问题：
+1. 用 ```json ``` 代码块包裹
+2. 用单引号代替双引号
+3. 多行字符串中的额外空白
+
+本文件负责处理这些常见问题，将 LLM 的原始输出解析为
+Python 可用的结构化数据。
+
+使用方式：
+    parser = ResponseParser()
+    data = parser.parse_json(llm_response)
+    facts = parser.extract_facts(llm_response)
+    validated = parser.validate_against_schema(data, MySchema)
+"""
 
 import json
 import re

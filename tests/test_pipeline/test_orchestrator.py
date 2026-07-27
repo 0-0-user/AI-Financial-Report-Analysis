@@ -1,4 +1,13 @@
-"""编排器单元测试"""
+"""
+==========================================================
+ tests/test_pipeline/test_orchestrator.py — 编排器测试
+==========================================================
+
+测试 Orchestrator 的核心功能：
+- 所有步骤是否已正确注册
+- 跳过步骤功能是否正常
+- 错误传播机制
+"""
 
 import pytest
 from pipeline.orchestrator import Orchestrator

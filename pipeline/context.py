@@ -1,4 +1,23 @@
-"""层间数据传递上下文——贯穿全流程的数据背包"""
+"""
+==========================================================
+ pipeline/context.py — 层间数据传递上下文
+==========================================================
+
+PipelineContext 是一个贯穿全流程的"数据背包"。
+每一层执行完毕后，将输出结果存入 context 中对应的字段。
+下一层执行时，从 context 读取需要的输入数据。
+
+这种设计的好处：
+- 每一层只需要关注自己的输入/输出，不需要知道其他层的细节
+- 方便调试：可以打印整个 context 查看中间结果
+- 支持跳过：调试时可以只跑某几层
+
+使用方式：
+    ctx = PipelineContext()
+    ctx.raw_doc = RawDocument(...)   # 第0层写
+    ctx.tags = CompanyTags(...)      # A层写
+    # ...
+"""
 
 from dataclasses import dataclass, field
 from typing import Optional

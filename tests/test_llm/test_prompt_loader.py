@@ -1,4 +1,13 @@
-"""Prompt 加载器测试"""
+"""
+==========================================================
+ tests/test_llm/test_prompt_loader.py — Prompt 加载器测试
+==========================================================
+
+测试 PromptLoader 的核心功能：
+- 能正确加载存在的 prompt 文件
+- 不存在的文件应报 FileNotFoundError
+- 模板渲染应正确填充变量
+"""
 
 import pytest
 from llm.prompt_loader import PromptLoader

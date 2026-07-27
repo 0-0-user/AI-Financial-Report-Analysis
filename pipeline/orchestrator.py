@@ -1,9 +1,24 @@
-"""主调度器——按顺序执行 0→A→B→B+→C→D→E"""
+"""
+==========================================================
+ pipeline/orchestrator.py — 主调度器
+==========================================================
+
+按标准顺序调度各层执行：0 → A → B → B+ → C → D → E。
+每一层的输出自动存入 PipelineContext，供下一层读取。
+
+如果某一步失败或抛出异常，流水线会立即终止并返回错误报告。
+支持跳过指定步骤（调试时很有用）。
+
+使用方式：
+    orch = Orchestrator()
+    orch.skip("layer_c", "layer_d")  # 调试时跳过某些步骤
+    report = orch.run("年报.pdf")
+"""
 
 from pipeline.context import PipelineContext
 from pipeline.step_registry import registry
 
-from schemas.report import Report
+from schemas.report import Report, OverallAssessment, ScoreBreakdown, PeerComparison
 
 
 class Orchestrator:
@@ -55,7 +70,11 @@ class Orchestrator:
             company_name="",
             stock_code="",
             report_year=0,
-            overall_assessment={"status": "失败", "errors": ctx.errors},
+            overall_assessment=OverallAssessment(
+                score=0,
+                confidence_tier="低置信度",
+                peer_comparisons=[],
+            ),
             core_anomalies=[],
             bull_points=[],
             bear_points=[],

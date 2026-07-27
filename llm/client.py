@@ -1,4 +1,24 @@
-"""统一的 LLM 调用接口，屏蔽不同厂商 API 差异"""
+"""
+==========================================================
+ llm/client.py — 统一的 LLM 调用接口
+==========================================================
+
+封装大模型 API 调用，提供统一的 chat() 方法。
+所有需要调用 LLM 的层（A0/A1/B0/D1/D2）都使用这个 client。
+
+核心功能：
+1. 多厂商切换：支持 Anthropic / OpenAI / 本地模型
+2. 统一调用：chat(prompt_name, variables) 方式
+3. 结构化输出：可指定 Pydantic 模型作为输出格式
+4. Token 估算：count_tokens() 用于成本监控
+
+使用方式：
+    client = LLMClient(provider="anthropic")
+    result = client.chat("a1_tagging", {"company_name": "茅台", ...})
+
+安全提醒：
+    API Key 通过环境变量配置，不写入代码。
+"""
 
 from typing import Optional, Type
 from pydantic import BaseModel

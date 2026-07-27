@@ -1,8 +1,24 @@
-"""命令行入口：运行完整分析流水线
+"""
+==========================================================
+ scripts/run_pipeline.py — 命令行入口：运行完整分析流水线
+==========================================================
 
-用法：
+用户的唯一入口脚本。通过命令行参数控制流水线行为。
+
+核心功能：
+1. 指定要分析的 PDF 文件路径（必填）
+2. 指定报告输出目录（可选，默认 data/outputs/）
+3. 从指定步骤开始运行（可选，调试用）
+4. 跳过 LLM 调用（可选，复用缓存时用）
+
+使用方式：
+    # 基本用法
     python scripts/run_pipeline.py --pdf data/raw/600519_2024.pdf
+
+    # 从 C 层开始（跳过之前步骤）
     python scripts/run_pipeline.py --pdf xxx.pdf --from layer_c
+
+    # 不调 LLM（用缓存数据）
     python scripts/run_pipeline.py --pdf xxx.pdf --no-llm
 """
 

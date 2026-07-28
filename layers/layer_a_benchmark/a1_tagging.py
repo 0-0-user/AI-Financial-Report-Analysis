@@ -1,22 +1,22 @@
-"""A1层：语义提取——硬标签 + 财务数字画像
+"""A1层：纯代码查硬标签——同花顺行业分类 CSV
 
 职责：
-- 优先从同花顺行业分类 CSV 查表获取硬标签
-- CSV 查到硬标签 → LLM 只输出 6 维财务等级
-- CSV 查不到 → LLM 同时输出硬标签 + 等级
-- LLM 不可用 → 关键词规则降级硬标签，数字画像设为 None
+- 从同花顺行业分类 CSV 查表获取硬标签（三级+二级+一级行业）
+- 三级降级：股票代码精确匹配 → 公司名模糊匹配 → 关键词规则兜底
+- 纯代码实现，不涉及任何 LLM 调用
+- 财务数字画像由 A2 层从 akshare 实际财务数据计算
 """
 
 import logging
 from pathlib import Path
 
-from schemas.tags import CompanyTags, HardTag, FinancialProfile
+from schemas.tags import CompanyTags, HardTag
 from schemas.raw_doc import RawDocument
 
 logger = logging.getLogger(__name__)
 
 # ────────────────────────────────────────────
-# 同花顺行业分类 CSV 查表（硬标签优先路径）
+# 同花顺行业分类 CSV 查表（硬标签）
 # ────────────────────────────────────────────
 
 _INDUSTRY_CSV_PATH = Path("data/industry/thf_industry_classification.csv")
@@ -111,23 +111,17 @@ def _csv_lookup_hard_tags(stock_code: str, company_name: str) -> list[HardTag] |
     return None
 
 
-def _hard_tags_to_str(hard_tags: list[HardTag]) -> str:
-    """HardTag 列表 → 描述文字"""
-    return ", ".join(f"{t.system}={t.value}" for t in hard_tags)
-
-
 # ────────────────────────────────────────────
 # 主入口
 # ────────────────────────────────────────────
 
 def run_tagging(raw_doc: RawDocument) -> CompanyTags:
-    """读取公司信息，输出硬标签 + 财务数字画像
+    """读取公司信息，输出硬标签（纯代码，不调 LLM）
 
     流程：
-        1. CSV 查硬标签（股票代码 → 公司名 → 降级）
-        2. CSV 查到 → LLM 只出 6 维等级
-        3. CSV 查不到 → LLM 同时出硬标签 + 等级
-        4. LLM 不可用 → 关键词降级，画像=None
+        1. CSV 查硬标签（股票代码 → 公司名模糊匹配）
+        2. CSV 查不到 → 关键词规则兜底
+        3. 财务数字画像由 A2 层从 akshare 实际数据计算
     """
     company_name = raw_doc.metadata.get("company_name", "")
     stock_code = raw_doc.metadata.get("stock_code", "")
@@ -135,109 +129,24 @@ def run_tagging(raw_doc: RawDocument) -> CompanyTags:
     industry_text = raw_doc.company_overview.industry_classification or ""
     full_text = f"{company_name}\n{industry_text}\n{business_desc}"
 
-    # 第一步：CSV 查硬标签
+    # CSV 查硬标签
     csv_hard_tags = _csv_lookup_hard_tags(stock_code, company_name)
     if csv_hard_tags:
-        logger.info(f"CSV 查到硬标签: {_hard_tags_to_str(csv_hard_tags)}")
-        try:
-            fp = _llm_tagging(
-                company_name, business_desc,
-                existing_hard_tags=csv_hard_tags,
-            )
-            return CompanyTags(
-                company_name=company_name,
-                stock_code=stock_code,
-                hard_tags=csv_hard_tags,
-                financial_profile=fp,
-            )
-        except Exception as e:
-            logger.warning(f"CSV 后 LLM 画像失败: {e}")
-            return CompanyTags(
-                company_name=company_name,
-                stock_code=stock_code,
-                hard_tags=csv_hard_tags,
-                financial_profile=None,
-            )
+        logger.info(f"CSV 查到硬标签: {', '.join(f'{t.system}={t.value}' for t in csv_hard_tags)}")
+        return CompanyTags(
+            company_name=company_name,
+            stock_code=stock_code,
+            hard_tags=csv_hard_tags,
+            financial_profile=None,  # A2 层会从 akshare 计算
+        )
 
-    # 第二步：LLM 同时出硬标签 + 数字画像
-    try:
-        return _llm_tagging(company_name, business_desc)
-    except Exception as e:
-        logger.warning(f"LLM 打标签失败，回退到规则匹配: {e}")
-        return _rule_based_tagging(company_name, stock_code, full_text)
+    # 降级：关键词规则匹配
+    logger.warning(f"CSV 未查到 {company_name}({stock_code})，走关键词降级")
+    return _rule_based_tagging(company_name, stock_code, full_text)
 
 
 # ────────────────────────────────────────────
-# LLM 路径
-# ────────────────────────────────────────────
-
-def _llm_tagging(
-    company_name: str,
-    business_desc: str,
-    existing_hard_tags: list[HardTag] | None = None,
-) -> CompanyTags | FinancialProfile:
-    """通过 LLM 获取财务数字画像
-
-    返回：
-    - existing_hard_tags 有值 → FinancialProfile（仅等级数组）
-    - 无 → CompanyTags（硬标签 + 等级数组）
-    """
-    from llm.client import LLMClient
-
-    variables: dict[str, str] = {
-        "company_name": company_name,
-        "business_description": business_desc,
-    }
-    if existing_hard_tags:
-        variables["existing_hard_tags"] = _hard_tags_to_str(existing_hard_tags)
-
-    client = LLMClient()
-    response = client.chat("a1_tagging", variables)
-    data = _extract_json(response if isinstance(response, str) else str(response))
-
-    levels = data.get("levels", [])
-    if not levels or len(levels) != 6:
-        logger.warning(f"LLM 返回 levels 格式异常: {levels}")
-        levels = ["中", "中", "中", "中", "中", "中"]
-
-    if existing_hard_tags:
-        return FinancialProfile(levels=levels)
-
-    # 模式2：同时出硬标签
-    hard_tag_val = data.get("hard_tag", "")
-    hard_tags = [HardTag(value=hard_tag_val)] if hard_tag_val else [HardTag(value="未知行业")]
-    return CompanyTags(
-        company_name=company_name,
-        stock_code="",
-        hard_tags=hard_tags,
-        financial_profile=FinancialProfile(levels=levels),
-    )
-
-
-def _extract_json(text: str) -> dict:
-    """从 LLM 文本中提取 JSON"""
-    import json
-    import re
-
-    text = text.strip()
-    fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
-    if fence_match:
-        text = fence_match.group(1)
-    brace_match = re.search(r'\{[\s\S]*\}', text)
-    if brace_match:
-        text = brace_match.group(0)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        try:
-            return json.loads(text.replace("'", '"'))
-        except json.JSONDecodeError:
-            logger.warning(f"无法解析 JSON: {text[:200]}")
-            return {}
-
-
-# ────────────────────────────────────────────
-# 关键词规则降级（LLM 不可用时）
+# 关键词规则降级（CSV 查不到时）
 # ────────────────────────────────────────────
 
 _KEYWORD_HARD_TAG_MAP: dict[str, str] = {
@@ -284,7 +193,7 @@ _KEYWORD_HARD_TAG_MAP: dict[str, str] = {
 
 
 def _rule_based_tagging(company_name: str, stock_code: str, text: str) -> CompanyTags:
-    """关键词规则降级（LLM 不可用时）"""
+    """关键词规则降级（CSV 查不到时）"""
     matched = None
     for keyword, industry in _KEYWORD_HARD_TAG_MAP.items():
         if keyword in text:
@@ -296,5 +205,5 @@ def _rule_based_tagging(company_name: str, stock_code: str, text: str) -> Compan
         company_name=company_name,
         stock_code=stock_code,
         hard_tags=hard_tags,
-        financial_profile=None,
+        financial_profile=None,  # A2 层会从 akshare 计算
     )

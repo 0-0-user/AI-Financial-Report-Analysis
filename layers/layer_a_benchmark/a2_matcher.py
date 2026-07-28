@@ -1,108 +1,125 @@
-"""A2层：匹配模式相似的企业——纯代码匹配 + 算基准
+"""A2层：财务数字画像匹配同行——纯代码向量相似度
 
 职责：
-- 硬标签强制锁定行业范围（如"白酒"行业只能从白酒同行中找）
-- 软标签计算相似度（Jaccard + 加权匹配），找 3~5 家最相似同行
-- 计算同行中位数（横向基准）和自身 5 年均值（纵向基准）
+- 从同花顺行业分类 CSV 获取二级行业同行池
+- 通过 akshare 在线获取同行财务数据（内存缓存，不落盘）
+- 5 年财务数据 → 逐维中位数合并 → 6 维数值向量
+- 余弦相似度排序 → Top 5（E层展示）+ Top 20%（C层MAD基准）
 
-设计约束（架构文档要求）：
+设计约束：
 - 纯代码实现，不涉及任何 LLM 调用
-- 基准数据从 data/benchmarks/ 读取
+- 数据通过 akshare 实时获取 + 内存缓存，不写磁盘文件
 """
 
 import csv
-import json
 import logging
+import math
 import statistics
 from pathlib import Path
 from typing import Optional
 
-import yaml
-
-from schemas.tags import CompanyTags, HardTag, SoftTag
+from schemas.tags import CompanyTags, FinancialProfile
 from schemas.benchmark import Benchmark, PeerCompany, IndustryProfile
 
 logger = logging.getLogger(__name__)
 
-# 基准数据默认路径
-DEFAULT_BENCHMARK_DIR = Path("data/benchmarks")
-TAGS_CONFIG_PATH = Path("config/industry_tags.yaml")
-PEER_COUNT_MIN = 3
-PEER_COUNT_MAX = 5
+# ────────────────────────────────────────────
+# 路径常量
+# ────────────────────────────────────────────
+_INDUSTRY_CSV_PATH = Path("data/industry/thf_industry_classification.csv")
+
+# 6 维特征顺序（与 FINANCIAL_DIMENSIONS 一致）
+_DIMENSION_NAMES = [
+    "毛利率水平", "净利率水平", "总资产周转率",
+    "资产负债率", "研发费用率", "销售费用率",
+]
+
+# CSV → 内部字段名映射
+_DIMENSION_TO_COLUMN = {
+    "毛利率水平": "毛利率", "净利率水平": "净利率",
+    "总资产周转率": "总资产周转率", "资产负债率": "资产负债率",
+    "研发费用率": "研发费用率", "销售费用率": "销售费用率",
+}
+
+# akshare 返回的字段名映射（如果列名不同，在此修改）
+_AKSHARE_COLUMN_MAP = {
+    "毛利率": "毛利率", "净利率": "净利率",
+    "总资产周转率": "总资产周转率", "资产负债率": "资产负债率",
+    "研发费用率": "研发费用率", "销售费用率": "销售费用率",
+}
+
+_PEER_COUNT_MIN = 5
+_TOP_PERCENT = 0.2
+
+
+# ────────────────────────────────────────────
+# 内存缓存（仅当前会话有效）
+# ────────────────────────────────────────────
+# key=stock_code, value=list[dict]（每元素含 6 个财务指标 + year）
+_FINANCIAL_CACHE: dict[str, list[dict]] = {}
 
 
 # ────────────────────────────────────────────
 # 主入口
 # ────────────────────────────────────────────
 
-def run_matching(
-    tags: CompanyTags,
-    benchmark_dir: Optional[Path] = None,
-) -> Benchmark:
+def run_matching(tags: CompanyTags) -> Benchmark:
     """匹配相似企业并计算基准
 
-    流程：
-        1. 硬标签锁定行业范围 → 过滤出同行业的公司
-        2. 软标签加权相似度 → 排序取 Top 3~5
-        3. 计算同行中位数（横向基准）
-        4. 提取该企业自身 5 年数据均值（纵向基准）
-
     Args:
-        tags: A1 层输出的 CompanyTags
-        benchmark_dir: 基准数据库目录，默认 data/benchmarks/
+        tags: A1 层输出的 CompanyTags（含 financial_profile）
 
     Returns:
-        Benchmark（同行公司列表 + 中位数 + 历史均值）
+        Benchmark（同行列表 + 横向中位数）
     """
-    bm_dir = benchmark_dir or DEFAULT_BENCHMARK_DIR
+    if not tags.financial_profile:
+        logger.warning("目标公司无财务数字画像，返回空基准")
+        return _empty_benchmark(tags)
 
-    # 步骤1：加载全部基准数据
-    all_peers = _load_benchmark_database(bm_dir)
+    target_vec = tags.financial_profile.as_numeric
 
-    # 步骤2：用硬标签锁定行业
-    hard_industry = _extract_primary_hard_tag(tags.hard_tags)
-    same_industry = _filter_by_hard_tag(all_peers, hard_industry)
+    # 从硬标签提取二级行业
+    industry_name = _extract_industry_level2(tags.hard_tags)
+    if not industry_name:
+        logger.warning("无法确定二级行业，返回空基准")
+        return _empty_benchmark(tags)
 
-    if not same_industry:
-        logger.warning(f"基准库中没有找到行业 [{hard_industry}] 的数据，返回空基准")
-        return Benchmark(
-            industry=IndustryProfile(
-                industry_name=hard_industry,
-                hard_tag_system="同花顺三级行业",
-            ),
-            peer_median={},
-            historical_mean={},
-            peer_companies=[],
-        )
+    # 获取同行池（同二级行业的所有公司代码）
+    peers = _load_peer_pool(industry_name)
+    if not peers:
+        logger.warning(f"行业 [{industry_name}] 在 CSV 中无数据")
+        return _empty_benchmark(tags, industry_name)
 
-    # 步骤3：用软标签计算相似度并排序
-    soft_tag_weights = _load_soft_tag_weights()
-    scored_peers = _score_and_rank(same_industry, tags.soft_tags, soft_tag_weights)
+    peer_count = len(peers)
+    logger.info(f"行业 [{industry_name}] 共 {peer_count} 家同行")
 
-    # 步骤4：取 Top 3~5
-    top_peers = scored_peers[:PEER_COUNT_MAX]
-    if len(top_peers) < PEER_COUNT_MIN and len(same_industry) >= PEER_COUNT_MIN:
-        top_peers = same_industry[:PEER_COUNT_MIN]  # 相似度不够时放宽限制
+    # 通过 akshare 获取财务数据（内存缓存）
+    peer_vectors = _fetch_and_compute_vectors(peers)
+    if not peer_vectors:
+        logger.warning("未能获取同行财务数据")
+        return _empty_benchmark(tags, industry_name)
 
-    # 步骤5：计算横向基准（同行中位数）
-    peer_median = _calc_peer_median(top_peers)
+    # 余弦相似度排序
+    scored = _cosine_rank(target_vec, peer_vectors)
 
-    # 步骤6：计算纵向基准（自身历史均值）
-    historical_mean = _calc_historical_mean(all_peers, tags.stock_code)
+    # 双池
+    top5 = scored[:5]
+    mad_size = max(math.ceil(peer_count * _TOP_PERCENT), _PEER_COUNT_MIN)
+    mad_pool = scored[:mad_size]
+    if peer_count < 10:
+        mad_pool = top5
 
-    # 构建软标签摘要
-    soft_summary = ", ".join(
-        f"{t.dimension}={t.value}" for t in tags.soft_tags[:8]
-    )
+    # 横向基准
+    peer_median = _calc_peer_median(mad_pool)
+    logger.info(f"MAD 基准池 {len(mad_pool)} 家")
 
     return Benchmark(
         industry=IndustryProfile(
-            industry_name=hard_industry,
-            hard_tag_system="同花顺三级行业",
-            soft_tag_summary=soft_summary,
+            industry_name=industry_name,
+            hard_tag_system="同花顺二级行业",
         ),
         peer_median=peer_median,
-        historical_mean=historical_mean,
+        historical_mean={},
         peer_companies=[
             PeerCompany(
                 name=p["name"],
@@ -110,261 +127,305 @@ def run_matching(
                 similarity_score=p.get("similarity_score", 0.0),
                 financials=p.get("financials", {}),
             )
-            for p in top_peers
+            for p in top5
         ],
     )
 
 
 # ────────────────────────────────────────────
-# 数据加载
+# 行业池（CSV 查表）
 # ────────────────────────────────────────────
 
-def _load_benchmark_database(bm_dir: Path) -> list[dict]:
-    """从基准目录加载全部公司财务数据
-
-    支持格式：CSV（列含 stock_code, name, industry, year, indicator, value）
-              或 JSON（每公司一个文件）
-    """
-    companies: dict[str, dict] = {}  # key = stock_code
-
-    if not bm_dir.exists():
-        logger.warning(f"基准数据目录不存在: {bm_dir}")
-        return []
-
-    # 尝试加载 CSV 格式
-    csv_files = list(bm_dir.glob("*.csv"))
-    for csv_path in csv_files:
-        with open(csv_path, encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                code = row.get("stock_code", "")
-                if not code:
-                    continue
-                if code not in companies:
-                    companies[code] = {
-                        "stock_code": code,
-                        "name": row.get("name", row.get("company_name", "")),
-                        "industry": row.get("industry", ""),
-                        "hard_tags": [row.get("industry", "")],
-                        "soft_tags": [],
-                        "financials": {},
-                        "historical": {},  # 按年份存储的历史数据
-                    }
-                # 累积财务指标
-                indicator = row.get("indicator", "")
-                try:
-                    value = float(row.get("value", 0))
-                except (ValueError, TypeError):
-                    continue
-                if indicator:
-                    companies[code]["financials"][indicator] = value
-
-    # 尝试加载 JSON 格式
-    json_files = list(bm_dir.glob("*.json"))
-    for json_path in json_files:
-        with open(json_path, encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, list):
-                for entry in data:
-                    code = entry.get("stock_code", "")
-                    if code and code not in companies:
-                        companies[code] = entry
-            elif isinstance(data, dict):
-                code = data.get("stock_code", "")
-                if code and code not in companies:
-                    companies[code] = data
-
-    return list(companies.values())
+_INDUSTRY_CACHE: dict[str, dict] | None = None
+_INDUSTRY_LIST: list[dict] | None = None
 
 
-def _load_soft_tag_weights() -> dict[str, float]:
-    """从 config/industry_tags.yaml 加载软标签匹配权重"""
-    if not TAGS_CONFIG_PATH.exists():
-        return {}
-    with open(TAGS_CONFIG_PATH, encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    return config.get("matching_weights", {}).get("soft_tag_weights", {})
+def _load_industry_csv():
+    """惰性加载行业分类 CSV"""
+    global _INDUSTRY_CACHE, _INDUSTRY_LIST
+    if _INDUSTRY_CACHE is not None:
+        return
+
+    if not _INDUSTRY_CSV_PATH.exists():
+        _INDUSTRY_CACHE, _INDUSTRY_LIST = {}, []
+        return
+
+    import io
+    with open(_INDUSTRY_CSV_PATH, "rb") as f:
+        text = f.read().decode("utf-8-sig")
+
+    cache, rows = {}, []
+    for row in csv.DictReader(io.StringIO(text)):
+        code = row["股票代码"].strip()
+        code_norm = code.split(".")[0]
+        entry = {
+            "code": code, "name": row["股票简称"].strip(),
+            "level1": row["所属同花顺一级行业"].strip(),
+            "level2": row["所属同花顺二级行业"].strip(),
+            "level3": row["所属同花顺三级行业"].strip(),
+        }
+        cache[code_norm] = cache[code] = entry
+        rows.append(entry)
+
+    _INDUSTRY_CACHE, _INDUSTRY_LIST = cache, rows
+    logger.info(f"A2 加载行业 CSV: {len(rows)} 只股票")
 
 
-# ────────────────────────────────────────────
-# 硬标签过滤
-# ────────────────────────────────────────────
-
-def _extract_primary_hard_tag(hard_tags: list[HardTag]) -> str:
-    """提取主硬标签值（优先同花顺三级行业）"""
+def _extract_industry_level2(hard_tags) -> str:
+    """从硬标签中提取二级行业"""
+    for ht in hard_tags:
+        if ht.system == "同花顺二级行业" and ht.value:
+            return ht.value
     for ht in hard_tags:
         if ht.system == "同花顺三级行业" and ht.value:
-            return ht.value
-    # 回退：取第一个非空的硬标签
-    for ht in hard_tags:
-        if ht.value:
-            return ht.value
-    return "未知行业"
+            return _resolve_level2(ht.value)
+    return ""
 
 
-def _filter_by_hard_tag(peers: list[dict], industry: str) -> list[dict]:
-    """硬标签强制筛选：只保留同行业公司
+def _resolve_level2(level3: str) -> str:
+    _load_industry_csv()
+    if _INDUSTRY_LIST:
+        for row in _INDUSTRY_LIST:
+            if row["level3"] == level3:
+                return row["level2"]
+    return ""
 
-    排除被分析公司自身（后面通过 stock_code 区分）
+
+def _load_peer_pool(industry_level2: str) -> list[dict]:
+    """加载同一二级行业的所有公司"""
+    _load_industry_csv()
+    if not _INDUSTRY_LIST:
+        return []
+    return [row for row in _INDUSTRY_LIST if row["level2"] == industry_level2]
+
+
+# ────────────────────────────────────────────
+# 财务数据获取（akshare + 内存缓存）
+# ────────────────────────────────────────────
+
+def _fetch_financial_data(stock_code: str) -> list[dict]:
+    """从 akshare 获取某公司近年财务数据，带内存缓存
+
+    Returns:
+        [{"year": "2022", "毛利率": 82.5, "净利率": 35.2, ...}, ...]
+        按年份降序排列（最新的在前）
     """
-    return [
-        p for p in peers
-        if industry in (p.get("industry", ""), p.get("hard_tags", []))
-           or industry in str(p.get("hard_tags", []))
-    ]
+    # 命中缓存
+    if stock_code in _FINANCIAL_CACHE:
+        return _FINANCIAL_CACHE[stock_code]
+
+    norm_code = stock_code.split(".")[0]
+    if norm_code in _FINANCIAL_CACHE:
+        return _FINANCIAL_CACHE[norm_code]
+
+    # 尝试 akshare
+    try:
+        import akshare as ak
+        df = ak.stock_financial_analysis_indicator(symbol=norm_code, start_year="2021")
+
+        if df is None or df.empty:
+            _FINANCIAL_CACHE[stock_code] = []
+            return []
+
+        # 解析 DataFrame 为统一格式
+        records = _parse_akshare_df(df, norm_code)
+        _FINANCIAL_CACHE[stock_code] = records
+        if norm_code != stock_code:
+            _FINANCIAL_CACHE[norm_code] = records
+        return records
+
+    except ImportError:
+        logger.warning("akshare 未安装，无法获取财务数据")
+        _FINANCIAL_CACHE[stock_code] = []
+        return []
+    except Exception as e:
+        logger.warning(f"akshare 获取 {norm_code} 失败: {e}")
+        _FINANCIAL_CACHE[stock_code] = []
+        return []
 
 
-# ────────────────────────────────────────────
-# 软标签相似度计算
-# ────────────────────────────────────────────
+def _parse_akshare_df(df, stock_code: str) -> list[dict]:
+    """将 akshare 返回的 DataFrame 解析为统一格式
 
-def _score_and_rank(
-    peers: list[dict],
-    target_soft_tags: list[SoftTag],
-    dimension_weights: dict[str, float],
-) -> list[dict]:
-    """用软标签计算相似度并排序（降序）"""
-    scored = []
+    需要适配实际 akshare 返回的列名结构。
+    当前实现假设典型的财务分析指标表格式。
+    """
+    import pandas as pd
+
+    records = []
+    col_map = _AKSHARE_COLUMN_MAP
+
+    for _, row in df.iterrows():
+        year = str(row.get("年份", row.get("报告期", "")))
+        if not year:
+            continue
+
+        record = {"year": year[:4]}
+        has_data = False
+        for dim_name in _DIMENSION_NAMES:
+            col_name = col_map.get(dim_name, "")
+            val = None
+            if col_name in row:
+                try:
+                    val = float(row[col_name])
+                except (ValueError, TypeError):
+                    pass
+            record[col_name] = val
+            if val is not None:
+                has_data = True
+
+        if has_data:
+            records.append(record)
+
+    return records
+
+
+def _fetch_and_compute_vectors(peers: list[dict]) -> list[dict]:
+    """对每家公司获取数据并计算等级向量"""
+    result = []
     for peer in peers:
-        peer_soft_tags = peer.get("soft_tags", [])
-        if isinstance(peer_soft_tags, list) and peer_soft_tags and isinstance(peer_soft_tags[0], str):
-            # 如果软标签以字符串形式存储（如 "重资产"），做简单匹配
-            score = _simple_string_similarity(target_soft_tags, peer_soft_tags, dimension_weights)
-        elif isinstance(peer_soft_tags, list) and peer_soft_tags and isinstance(peer_soft_tags[0], dict):
-            # 如果软标签以 dict 形式存储（如 {"dimension": "资产结构", "value": "重资产"}）
-            score = _structured_similarity(target_soft_tags, peer_soft_tags, dimension_weights)
-        else:
-            score = 0.0
+        code = peer["code"]
+        year_data = _fetch_financial_data(code)
+        if not year_data:
+            continue
 
-        peer_copy = dict(peer)
-        peer_copy["similarity_score"] = round(score, 4)
-        scored.append(peer_copy)
+        # 每行 → 等级数组
+        level_arrays = [_compute_level_array(yr) for yr in year_data]
+        merged = _merge_levels_by_median(level_arrays)
+        numeric_vec = FinancialProfile(levels=merged).as_numeric
 
-    scored.sort(key=lambda p: p["similarity_score"], reverse=True)
-    return scored
+        # 最新年份的财务数据
+        latest = year_data[0] if year_data else {}
+        financials = {}
+        for dim in _DIMENSION_NAMES:
+            col = _DIMENSION_TO_COLUMN.get(dim, dim)
+            financials[col] = float(latest.get(col, 0) or 0)
 
+        result.append({
+            "stock_code": code,
+            "name": peer["name"],
+            "financials": financials,
+            "level_array": merged,
+            "numeric_vector": numeric_vec,
+            "similarity_score": 0.0,
+        })
 
-def _structured_similarity(
-    target: list[SoftTag],
-    peer_tags: list[dict],
-    weights: dict[str, float],
-) -> float:
-    """结构化的软标签相似度（Jaccard 加权）"""
-    if not target:
-        return 0.0
-
-    total_weight = 0.0
-    matched_weight = 0.0
-
-    # 将 peer 标签转为 {dimension: value} 映射
-    peer_map: dict[str, str] = {}
-    for pt in peer_tags:
-        dim = pt.get("dimension", "")
-        val = pt.get("value", "")
-        if dim and val:
-            peer_map[dim] = val
-
-    for t in target:
-        w = weights.get(t.dimension, 0.05)  # 默认权重 0.05
-        total_weight += w
-        if t.dimension in peer_map and peer_map[t.dimension] == t.value:
-            matched_weight += w
-
-    if total_weight == 0:
-        return 0.0
-    return matched_weight / total_weight
-
-
-def _simple_string_similarity(
-    target: list[SoftTag],
-    peer_tag_strings: list[str],
-    weights: dict[str, float],
-) -> float:
-    """基于字符串匹配的简易相似度"""
-    if not target:
-        return 0.0
-
-    peer_set = set(peer_tag_strings)
-    matches = 0
-    total_weight = 0.0
-
-    for t in target:
-        w = weights.get(t.dimension, 0.05)
-        total_weight += w
-        if t.value in peer_set:
-            matches += 1
-
-    if total_weight == 0:
-        return 0.0
-    # 简化：按匹配数量加权
-    jaccard = matches / max(len(target), len(peer_set))
-    return jaccard
+    return result
 
 
 # ────────────────────────────────────────────
-# 基准计算
+# 等级映射 & 余弦相似度
+# ────────────────────────────────────────────
+
+# 等级阈值（从 YAML 惰性加载）
+_LEVEL_THRESHOLDS: dict[str, list[tuple[str, float]]] | None = None
+
+
+def _load_thresholds():
+    global _LEVEL_THRESHOLDS
+    if _LEVEL_THRESHOLDS is not None:
+        return _LEVEL_THRESHOLDS
+
+    config_path = Path("config/industry_tags.yaml")
+    if not config_path.exists():
+        _LEVEL_THRESHOLDS = {}
+        return _LEVEL_THRESHOLDS
+
+    import yaml
+    with open(config_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    dims = config.get("financial_profile", {}).get("dimensions", [])
+    th = {}
+    for d in dims:
+        name = d["name"]
+        th[name] = sorted(d["thresholds"].items(), key=lambda x: -x[1])
+    _LEVEL_THRESHOLDS = th
+    return th
+
+
+def _value_to_level(value, thresholds) -> str:
+    for level, threshold in thresholds:
+        if float(value) >= threshold:
+            return level
+    return thresholds[-1][0] if thresholds else "中"
+
+
+def _compute_level_array(financial_data: dict) -> list[str]:
+    """一行财务数据 → 6 维等级数组"""
+    thresholds = _load_thresholds()
+    levels = []
+    for dim_name in _DIMENSION_NAMES:
+        col = _DIMENSION_TO_COLUMN.get(dim_name, dim_name)
+        val = financial_data.get(col)
+        dim_th = thresholds.get(dim_name, [])
+        if val is None or not dim_th:
+            levels.append("中")
+        else:
+            levels.append(_value_to_level(val, dim_th))
+    return levels
+
+
+def _merge_levels_by_median(level_arrays: list[list[str]]) -> list[str]:
+    """多年等级 → 逐维中位数合并"""
+    if not level_arrays:
+        return ["中"] * 6
+    if len(level_arrays) == 1:
+        return level_arrays[0]
+
+    from schemas.tags import LEVEL_TO_SCORE
+    score_matrix = [
+        [LEVEL_TO_SCORE.get(lv, 0.5) for lv in arr]
+        for arr in level_arrays
+    ]
+    merged = []
+    for dim_idx in range(6):
+        vals = sorted(row[dim_idx] for row in score_matrix)
+        median_val = statistics.median(vals)
+        merged.append(_nearest_level(median_val))
+    return merged
+
+
+def _nearest_level(score: float) -> str:
+    from schemas.tags import LEVEL_TO_SCORE
+    best, best_dist = "中", float("inf")
+    for level, s in LEVEL_TO_SCORE.items():
+        d = abs(score - s)
+        if d < best_dist:
+            best_dist, best = d, level
+    return best
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _cosine_rank(target_vec: list[float], peers: list[dict]) -> list[dict]:
+    for p in peers:
+        p["similarity_score"] = round(
+            _cosine_similarity(target_vec, p["numeric_vector"]), 4
+        )
+    return sorted(peers, key=lambda p: -p["similarity_score"])
+
+
+# ────────────────────────────────────────────
+# 基准 & 空降级
 # ────────────────────────────────────────────
 
 def _calc_peer_median(peers: list[dict]) -> dict[str, float]:
-    """计算同行各指标的中位数（横向基准）"""
-    # 收集所有指标 → 值列表
-    indicator_values: dict[str, list[float]] = {}
-    for peer in peers:
-        financials = peer.get("financials", {})
-        for ind, val in financials.items():
-            if ind not in indicator_values:
-                indicator_values[ind] = []
-            indicator_values[ind].append(float(val))
-
-    median_map = {}
-    for ind, vals in indicator_values.items():
-        if vals:
-            median_map[ind] = round(statistics.median(vals), 4)
-
-    return median_map
+    vals: dict[str, list[float]] = {}
+    for p in peers:
+        for ind, val in p.get("financials", {}).items():
+            vals.setdefault(ind, []).append(float(val))
+    return {ind: round(statistics.median(vs), 4) for ind, vs in vals.items() if vs}
 
 
-def _calc_historical_mean(all_peers: list[dict], stock_code: str) -> dict[str, float]:
-    """计算该公司自身过去 5 年均值（纵向基准）
-
-    排除异常暴雷年份：如果某年某指标变化超过 3 倍标准差，剔除该年
-    """
-    # 查找该公司
-    company = None
-    for p in all_peers:
-        if p.get("stock_code") == stock_code:
-            company = p
-            break
-
-    if not company:
-        return {}
-
-    historical = company.get("historical", {})
-    if not historical:
-        # 如果没有年份分层数据，直接用当前 financials 作为均值
-        return company.get("financials", {})
-
-    # historical 格式: {"2021": {"Net_Profit": 100, ...}, "2022": {...}, ...}
-    indicator_years: dict[str, list[float]] = {}
-    for year, indicators in historical.items():
-        for ind, val in indicators.items():
-            if ind not in indicator_years:
-                indicator_years[ind] = []
-            indicator_years[ind].append(float(val))
-
-    mean_map = {}
-    for ind, vals in indicator_years.items():
-        if len(vals) <= 2:
-            # 年份太少，直接取均值
-            mean_map[ind] = round(statistics.mean(vals), 4)
-        else:
-            # 剔除偏离超过 3 倍标准差的年份
-            mean_val = statistics.mean(vals)
-            stdev = statistics.stdev(vals) if len(vals) > 1 else 0
-            if stdev > 0:
-                filtered = [v for v in vals if abs(v - mean_val) <= 3 * stdev]
-                mean_map[ind] = round(statistics.mean(filtered) if filtered else mean_val, 4)
-            else:
-                mean_map[ind] = round(mean_val, 4)
-
-    return mean_map
+def _empty_benchmark(tags: CompanyTags, industry: str = "") -> Benchmark:
+    name = industry or _extract_industry_level2(tags.hard_tags) or "未知行业"
+    return Benchmark(
+        industry=IndustryProfile(industry_name=name, hard_tag_system="同花顺二级行业"),
+        peer_median={}, historical_mean={}, peer_companies=[],
+    )

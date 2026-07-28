@@ -30,7 +30,6 @@ class IndustryProfile(BaseModel):
     """被分析公司所在的行业特征"""
     industry_name: str                           # 行业名称（如 白酒）
     hard_tag_system: str = "同花顺三级行业"       # 标签分类体系
-    soft_tag_summary: str = ""                   # 行业共性的软标签描述
 
 
 class Benchmark(BaseModel):

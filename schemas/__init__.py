@@ -33,7 +33,7 @@ from .b0_guide import FieldMapping, ColumnHeader, TableGuide, B0Guide
 
 from .financial import FinancialField, ValidationCheck, ValidationResult, FinancialStatement
 
-from .tags import HardTag, SoftTag, CompanyTags
+from .tags import HardTag, FinancialProfile, CompanyTags
 
 from .anomaly import LogicAnomaly, DeviationAnomaly, LogicAnomalyList, DeviationList
 
@@ -70,7 +70,7 @@ __all__ = [
     "FinancialStatement",
     # tags
     "HardTag",
-    "SoftTag",
+    "FinancialProfile",
     "CompanyTags",
     # anomaly
     "LogicAnomaly",

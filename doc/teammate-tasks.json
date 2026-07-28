@@ -1,17 +1,17 @@
 {
   "项目名称": "AI-Financial-Report-Analysis",
-  "版本": "1.0",
+  "版本": "5.0",
   "生成日期": "2026-07-28",
   "目标": "上市公司年报 AI 分析系统，6 层流水线，严格分离 LLM（语义）和代码（数学）",
-  "当前状态": "框架基础设施已全部完成，等待 layer 层实现",
+  "当前状态": "A 层（行业基准）已由项目负责人完成，等待 B/D 层实现",
 
   "一、已完成的框架（你不需要动）": {
     "schemas": {
-      "说明": "9 个 Pydantic v2 数据模型，整个系统的数据契约",
+      "说明": "10 个 Pydantic v2 数据模型，整个系统的数据契约",
       "文件": "schemas/*.py",
       "关键模型": [
         "RawDocument — PDF 解析后的完整输出（四大区块）",
-        "CompanyTags — 硬标签 + 软标签",
+        "CompanyTags — 硬标签 + FinancialProfile（6维财务画像）",
         "Benchmark — 同行基准数据",
         "FinancialStatement — 三大报表数据",
         "LogicAnomaly / DeviationAnomaly — 异常数据结构",
@@ -36,23 +36,33 @@
       "上下文传递": "所有层共享 PipelineContext，你的层往里面写数据就行"
     },
     "config": {
-      "说明": "权重/阈值/行业标签/字段映射/9 个 prompt 模板",
+      "说明": "权重/阈值/行业标签/字段映射/8 个 prompt 模板",
       "README.md": "完整使用手册"
     },
+    "A层_行业基准（已由项目负责人实现）": {
+      "说明": "A0/A1/A2 三层已全部实现完毕，你不需要做任何 A 层工作",
+      "文件": "layers/layer_a_benchmark/*.py",
+      "包含": {
+        "A0": "联网搜索宏观情报（a0_search_query + SerpAPI + a0_macro_facts 两段式）",
+        "A1": "CSV查硬标签 + LLM 输出6维财务画像",
+        "A2": "余弦相似度匹配同行 + 内存缓存 akshare 数据"
+      }
+    },
     "tests": {
-      "说明": "25 个测试全部通过，覆盖 schemas/llm/pipeline/部分layer",
+      "说明": "26 个测试全部通过，覆盖 schemas/llm/pipeline/layers",
       "测试框架": "pytest"
     }
   },
 
-  "二、你需要实现的 7 层（按顺序）": {
-    "执行顺序": "layer_0 → layer_a → layer_b → layer_bplus → layer_c → layer_d → layer_e",
+  "二、你需要实现的 4 层（按顺序）": {
+    "执行顺序": "layer_0 → layer_b → layer_bplus → layer_d",
+    "注意": "A 层（layer_a_benchmark）已由项目负责人实现，C 层（layer_c_deviation）和 E 层（layer_e_output）也已完整实现，你不需要动。",
     "上下文数据结构": {
       "说明": "PipelineContext 是所有层的共享数据背包",
       "字段清单": {
         "raw_doc": "RawDocument — 第0层写入，后面各层读取",
         "macro_facts": "list[str] — A0层写入，D层读取",
-        "tags": "CompanyTags — A1层写入，A2和D层读取",
+        "tags": "CompanyTags — A1层写入，D层读取",
         "benchmark": "Benchmark — A2层写入，C层读取",
         "financials": "FinancialStatement — B层写入，C和B+层读取",
         "validation_passed": "bool — B1校验结果",
@@ -71,34 +81,6 @@
         "输入": "PDF 文件路径",
         "输出": "RawDocument（四大区块：财务数据/管理层讨论/附注/公司概况）",
         "注意": "要处理跨页表格合并、OCR识别不准确、不同财报格式"
-      },
-      "A层_行业基准": {
-        "说明": "A0 搜索宏观事实 + A1 打行业标签 + A2 匹配同行企业",
-        "文件": "layer_a_benchmark/*.py",
-        "各函数要求": [
-          {
-            "函数": "a0_macro_search.run_macro_search()",
-            "输入": "RawDocument + A1的tags + B层的成本数据",
-            "流程": "调用 prompt a0_search_query → 生成搜索词 → SerpAPI 搜索 → 调用 prompt a0_macro_facts → 提取4维度JSON",
-            "输出": "list[str]（4维度宏观事实）",
-            "依赖": "LLMClient, 两个 prompt 文件已写好, 需要你自己接入 SerpAPI"
-          },
-          {
-            "函数": "a1_tagging.run_tagging()",
-            "输入": "RawDocument.company_overview",
-            "流程": "① 优先从 data/industry/thf_industry_classification.csv 通过股票代码查表（已实现代码路径，你不需要改）→ ② CSV 查到硬标签则 LLM 只打软标签 → ③ CSV 查不到则 LLM 同时出硬标签+软标签 → ④ 关键词规则降级",
-            "输出": "CompanyTags",
-            "注意": "CSV 查表逻辑已由我写好（_csv_lookup_hard_tags / _csv_lookup_by_code / _csv_lookup_by_name），你不需要改。你只需要实现 CSV 路径不存在时的 LLM 调用（该部分已有 TODO 标记）",
-            "依赖": "LLMClient, config/prompts/a1_tagging.yaml"
-          },
-          {
-            "函数": "a2_matcher.run_matching()",
-            "输入": "CompanyTags",
-            "流程": "硬标签筛选同行 → 软标签算余弦相似度 → 计算行业中位数/均值",
-            "输出": "Benchmark",
-            "依赖": "纯代码逻辑，不需要LLM"
-          }
-        ]
       },
       "B层_财务数据提取": {
         "说明": "B0 LLM识别表头 → B1 Pandas提取数值 → B1 勾稽校验",
@@ -149,8 +131,8 @@
           },
           {
             "函数": "d1_hypothesis.generate_hypotheses()",
-            "输入": "异常 + macro_facts（A0产出）+ industry_tags + 偏差数据",
-            "流程": "调用 prompt d1_hypothesis → LLM基于外部情报发散假设",
+            "输入": "异常 + macro_facts（A0产出）+ CompanyTags（含 financial_profile）+ 偏差数据",
+            "流程": "调用 prompt d1_hypothesis → LLM基于外部情报+财务画像发散假设",
             "输出": "list[Hypothesis]（最多4种互斥假设）",
             "依赖": "LLMClient, config/prompts/d1_hypothesis.yaml"
           },
@@ -173,8 +155,6 @@
 
   "三、关键接口规范": {
     "如何注册你的层": {
-      "示例": [
-      ],
       "说明": "在 layer 的 __init__.py 中用 @registry.register(\"layer_0\") 装饰 run(ctx) 函数即可"
     },
     "LLM 调用方式": {
@@ -182,13 +162,13 @@
       "说明": "prompt_name 对应 config/prompts/ 下的 yaml 文件名（不含 .yaml）",
       "变量渲染": "模板中用 {{variable_name}} 占位，传 dict\n自动 Jinja2 渲染"
     },
-    "prompt 文件清单（9个，已全部写好，你直接调用）": [
+    "prompt 文件清单（8个，已全部写好，你直接调用）": [
       "a0_search_query — 生成4维度的联网搜索词",
       "a0_macro_facts — 从搜索结果中提取4维度宏观事实",
-      "a1_tagging — 给公司打硬标签+软标签",
+      "a1_tagging — 给公司打硬标签+输出6维财务等级画像",
       "b0_semantic_guide — 识别报表表头、字段映射、单位提取",
       "d1_lookup_notes — 从年报附注和管理层讨论中查找异常解释",
-      "d1_hypothesis — 基于宏观事实和行业标签推演异常假设",
+      "d1_hypothesis — 基于宏观事实和财务画像推演异常假设",
       "d2_probability — 综合双路径结果分配概率",
       "e2_report — 生成报告中的多空逻辑栈文本"
     ],
@@ -198,14 +178,14 @@
         "config/weights.yaml": "E1层打分权重",
         "config/thresholds.yaml": "B+/C层阈值",
         "config/financial_fields.yaml": "B0层字段映射表",
-        "config/industry_tags.yaml": "A1层标签体系"
+        "config/industry_tags.yaml": "硬标签体系 + 财务画像阈值"
       }
     },
     "如何跑测试": {
       "命令": "pytest -v",
-      "当前状态": "25 passed",
+      "当前状态": "26 passed",
       "环境": "Python 3.14, Windows",
-      "依赖安装": "pip install pydantic pandas numpy pyyaml jinja2 anthropic openai httpx pdfplumber pytest"
+      "依赖安装": "pip install pydantic pandas numpy pyyaml jinja2 anthropic openai httpx pdfplumber akshare pytest"
     },
     "SerpAPI 搜索集成": {
       "说明": "A0 层需要调 SerpAPI 联网搜索，API Key 在 .env 文件配置",
@@ -214,7 +194,7 @@
     }
   },
 
-  "四、实现顺序建议（按批次）": {
+  "四、实现顺序建议": {
     "批次1": {
       "任务": "第0层：PDF解析",
       "原因": "没有原始数据，后面所有层都无法运行",
@@ -222,33 +202,27 @@
       "预估复杂度": "⭐⭐⭐（需要处理PDF格式多样性）"
     },
     "批次2": {
-      "任务": "A1打标签 + B0表头识别 + B1数值提取",
+      "任务": "B0表头识别 + B1数值提取",
       "原因": "核心数据管道，打通后C层D层E层才能接真实数据",
-      "文件": "a1_tagging.py + b0_semantic_guide.py + b1_extractors.py",
+      "文件": "b0_semantic_guide.py + b1_extractors.py",
       "预估复杂度": "⭐⭐（LLM调用+Pandas提取）"
     },
     "批次3": {
-      "任务": "A2同行匹配 + B+逻辑校验 + D层推理",
+      "任务": "B+逻辑校验 + D层推理",
       "原因": "异常检测和归因是系统的核心价值",
-      "文件": "a2_matcher.py + logic_checks.py + d层3文件",
+      "文件": "logic_checks.py + d层3文件",
       "预估复杂度": "⭐⭐⭐⭐⭐（D层LLM调用最密集）"
-    },
-    "批次4": {
-      "任务": "A0联网搜索",
-      "原因": "依赖A1的行业标签和B层的成本数据，所以放最后",
-      "文件": "a0_macro_search.py",
-      "预估复杂度": "⭐⭐（LLM+SerpAPI编排）"
     }
   },
 
   "五、当前测试状态": {
-    "总数": 25,
-    "通过": 25,
+    "总数": 26,
+    "通过": 26,
     "覆盖范围": [
-      "schemas/ — Pydantic 模型系列化",
+      "schemas/ — Pydantic 模型系列化（含 FinancialProfile）",
       "llm/ — PromptLoader 渲染、ResponseParser 解析",
       "pipeline/ — Orchestrator 调度、StepRegistry 注册",
-      "layers/ — B1 校验逻辑、E1 评分逻辑、A2 匹配逻辑"
+      "layers/ — A2 余弦相似度匹配、B1 校验逻辑、C层MAD、E1评分逻辑"
     ]
   }
 }

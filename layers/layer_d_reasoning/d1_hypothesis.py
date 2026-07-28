@@ -78,12 +78,16 @@ def _build_hypothesis_context(
     ) if macro_facts else "（无宏观事实数据）"
 
     tag_text = "（无行业标签）"
-    if tags and tags.soft_tags:
-        pairs = [f"{t.dimension}={t.value}" for t in tags.soft_tags]
-        tag_text = "；".join(pairs)
     if tags and tags.hard_tags:
         hard_str = "；".join(f"{h.system}: {h.value}" for h in tags.hard_tags)
-        tag_text = f"[行业] {hard_str}\n[特征] {tag_text}"
+        tag_text = f"[行业] {hard_str}"
+    if tags and tags.financial_profile:
+        from schemas.tags import FINANCIAL_DIMENSIONS
+        fp_items = [
+            f"{FINANCIAL_DIMENSIONS[i]}={lv}"
+            for i, lv in enumerate(tags.financial_profile.levels)
+        ]
+        tag_text = f"{tag_text}\n[财务画像] {' | '.join(fp_items)}"
 
     return {
         "indicator": indicator,

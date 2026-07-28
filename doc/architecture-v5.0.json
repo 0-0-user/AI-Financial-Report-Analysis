@@ -38,18 +38,18 @@
       "id": "principle_csv_first",
       "role": "硬标签查表优先",
       "description": "客观行业分类（同花顺三级/二级行业）从CSV数据源查表确定，5536只A股全覆盖",
-      "detail": "LLM只在CSV查不到时才降级推断。CSV查到时LLM只输出6维财务等级数组，节省token并消除硬标签幻觉"
+      "detail": "LLM只在CSV查不到时才降级推断。CSV查到则直接确定硬标签"
     },
     {
       "id": "principle_vector_matching",
       "role": "同行匹配用向量而非文本",
       "description": "A2层不再依赖定性软标签做Jaccard文本匹配，改为基于6维财务等级向量的余弦相似度",
-      "detail": "LLM画出数字画像，代码做纯数学定位"
+      "detail": "A2从akshare实际财务数据算出数字画像，代码做纯数学定位"
     }
   ],
 
   "implementation_flow": [
-    {"step": 1, "action": "先看行业定性并画数字画像（A1层：CSV查硬标签 + LLM画6维财务等级）"},
+    {"step": 1, "action": "先查行业硬标签（A1层：纯代码CSV查硬标签）"},
     {"step": 2, "action": "再用向量匹配找同行基准（A2层：余弦相似度找Top 5 + Top 20%）"},
     {"step": 3, "action": "提取财务数据并校验（B层：表头映射→取数→勾稽校验）"},
     {"step": 4, "action": "发现异常偏差（B+层逻辑初筛 + C层MAD偏差检测）"},
@@ -60,7 +60,7 @@
   "design_rules": {
     "separation_of_concerns": "大模型、代码、数学计算三者严格分工，互不越界",
     "data_flow": "流水线式：每一层的输出是下一层的输入，层间通过标准化的PipelineContext传递数据",
-    "hard_tag_priority": "行业分类CSV查表优先于LLM推断，查不到才走LLM降级",
+    "hard_tag_priority": "行业分类CSV查表优先于关键词降级，纯代码实现，不依赖LLM",
     "a2_peer_matching": "二级行业池 + 余弦相似度 + 双池输出（Top 5展示 + Top 20% MAD基准）",
     "error_propagation": "B1层勾稽校验失败 → 阻断流水线 → 在E层输出系统异常报告"
   },
@@ -143,34 +143,23 @@
         },
         {
           "id": "a1",
-          "name": "A1层：语义提取与打标签 + 财务数字画像",
-          "task": "LLM读JSON里的文字部分，做两件事：①给出客观行业分类（硬标签）②给出6维财务特征等级（数字画像）",
-          "input": "JSON中的公司基本情况 + 行业背景文字",
+          "name": "A1层：纯代码查硬标签（CSV优先 + 关键词降级）",
+          "task": "从同花顺行业分类CSV查出公司的客观行业标签（三级+二级+一级），纯代码实现，不依赖LLM",
+          "input": "JSON中的公司基本情况（股票代码 + 公司名称）",
           "hard_tag_priority": {
-            "description": "同花顺三级行业CSV查表优先",
+            "description": "同花顺三级行业CSV查表优先，三级降级",
             "path_1": {"priority": 1, "method": "CSV股票代码精确匹配", "coverage": "5536只A股全量覆盖"},
             "path_2": {"priority": 2, "method": "CSV公司名模糊匹配（简称vs全称）", "coverage": "~95%"},
-            "path_3": {"priority": 3, "method": "LLM同时输出硬标签+等级", "trigger": "CSV查不到"},
-            "path_4": {"priority": 4, "method": "关键词规则降级", "trigger": "LLM不可用"}
+            "path_3": {"priority": 3, "method": "关键词规则降级（100+关键词→80+行业）", "trigger": "CSV查不到"}
           },
           "output": {
             "hard_tags": {
-              "description": "硬标签——同花顺三级行业分类",
-              "examples": ["白酒", "光伏制造设备", "锂电池", "CXO/医药外包"]
+              "description": "硬标签——同花顺三级+二级+一级行业分类",
+              "examples": ["白酒→饮料制造→食品饮料"]
             },
             "financial_profile": {
-              "description": "财务数字画像——6维特征等级数组（核心变更）",
-              "dimensions": ["毛利率水平", "净利率水平", "总资产周转率", "资产负债率", "研发费用率", "销售费用率"],
-              "thresholds": {
-                "毛利率水平": {"极高": ">70%", "中高": "40%-70%", "中等": "20%-40%", "低": "<20%"},
-                "净利率水平": {"极高": ">30%", "中高": "15%-30%", "中等": "5%-15%", "低": "<5%"},
-                "总资产周转率": {"极高": ">1.5次", "高": "1-1.5次", "中": "0.5-1次", "低": "<0.5次"},
-                "资产负债率": {"极高": ">80%", "高": "60%-80%", "中": "30%-60%", "低": "<30%"},
-                "研发费用率": {"极高": ">15%", "高": "8%-15%", "中": "3%-8%", "低": "<3%"},
-                "销售费用率": {"极高": ">40%", "高": "20%-40%", "中": "10%-20%", "低": "<10%"}
-              },
-              "output_format": "[\"极高\", \"极高\", \"低\", \"低\", \"低\", \"高\"]（不加任何解释文字）",
-              "numeric_mapping_for_a2": {"极高": 1.0, "高": 0.8, "中高": 0.8, "中等": 0.5, "中": 0.5, "低": 0.2}
+              "description": "A1不输出财务画像，改由A2从akshare实际财务数据计算",
+              "computed_by": "A2层：akshare获取5年数据 → 阈值映射6维等级 → 逐维中位数合并"
             }
           },
           "note": "不再输出16维定性软标签。SoftTag已从schema中移除。硬标签仅保留同花顺体系，不交叉验证"
@@ -553,7 +542,7 @@
           "industry_tags.yaml": "A层：同花顺硬标签体系 + 财务画像阈值（精简版，无软标签）",
           "thresholds.yaml": "B+/C层异常判定阈值",
           "financial_fields.yaml": "B0层字段映射表",
-          "prompts/": "8个LLM prompt模板（a0_search_query, a0_macro_facts, a1_tagging, b0_semantic_guide, d1_lookup_notes, d1_hypothesis, d2_probability, e2_report）"
+          "prompts/": "7个LLM prompt模板（a0_search_query, a0_macro_facts, b0_semantic_guide, d1_lookup_notes, d1_hypothesis, d2_probability, e2_report）"
         }
       },
       "schemas/": {
@@ -585,7 +574,7 @@
           "layer_0_extract/": ["pdf_parser.py (TODO)", "chunker.py (TODO)", "merger.py (TODO)"],
           "layer_a_benchmark/": [
             "a0_macro_search.py (LLM: 两段式prompt+SerpAPI联网搜情报)",
-            "a1_tagging.py (LLM: CSV查硬标签 + 画6维数字画像)",
+            "a1_tagging.py (纯代码: CSV查硬标签 + 关键词降级)",
             "a2_matcher.py (纯代码: 余弦相似度 + akshare缓存 + 双池输出)"
           ],
           "layer_b_extract/": [
@@ -664,7 +653,7 @@
     {
       "location": "A1层 → 硬标签",
       "condition": "CSV查不到硬标签",
-      "action": "LLM降级同时输出硬标签+等级画像；LLM不可用则关键词规则降级"
+      "action": "关键词规则降级（100+关键词映射到80+行业），不再依赖LLM"
     },
     {
       "location": "A2层 → 同行匹配",

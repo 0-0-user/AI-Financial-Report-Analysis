@@ -44,7 +44,7 @@
       "文件": "layers/layer_a_benchmark/*.py",
       "包含": {
         "A0": "联网搜索宏观情报（a0_search_query + SerpAPI + a0_macro_facts 两段式）",
-        "A1": "CSV查硬标签 + LLM 输出6维财务画像",
+        "A1": "CSV查硬标签 + 关键词降级（纯代码，无LLM）",
         "A2": "余弦相似度匹配同行 + 内存缓存 akshare 数据"
       }
     },
@@ -162,10 +162,9 @@
       "说明": "prompt_name 对应 config/prompts/ 下的 yaml 文件名（不含 .yaml）",
       "变量渲染": "模板中用 {{variable_name}} 占位，传 dict\n自动 Jinja2 渲染"
     },
-    "prompt 文件清单（8个，已全部写好，你直接调用）": [
+    "prompt 文件清单（7个，已全部写好，你直接调用）": [
       "a0_search_query — 生成4维度的联网搜索词",
       "a0_macro_facts — 从搜索结果中提取4维度宏观事实",
-      "a1_tagging — 给公司打硬标签+输出6维财务等级画像",
       "b0_semantic_guide — 识别报表表头、字段映射、单位提取",
       "d1_lookup_notes — 从年报附注和管理层讨论中查找异常解释",
       "d1_hypothesis — 基于宏观事实和财务画像推演异常假设",

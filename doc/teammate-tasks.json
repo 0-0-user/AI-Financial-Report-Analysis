@@ -1,0 +1,253 @@
+{
+  "项目名称": "AI-Financial-Report-Analysis",
+  "版本": "1.0",
+  "生成日期": "2026-07-28",
+  "目标": "上市公司年报 AI 分析系统，6 层流水线，严格分离 LLM（语义）和代码（数学）",
+  "当前状态": "框架基础设施已全部完成，等待 layer 层实现",
+
+  "一、已完成的框架（你不需要动）": {
+    "schemas": {
+      "说明": "9 个 Pydantic v2 数据模型，整个系统的数据契约",
+      "文件": "schemas/*.py",
+      "关键模型": [
+        "RawDocument — PDF 解析后的完整输出（四大区块）",
+        "CompanyTags — 硬标签 + 软标签",
+        "Benchmark — 同行基准数据",
+        "FinancialStatement — 三大报表数据",
+        "LogicAnomaly / DeviationAnomaly — 异常数据结构",
+        "Hypothesis / Explanation / ProbabilityAssignment — D 层推理结果",
+        "Report — 最终输出报告"
+      ]
+    },
+    "llm": {
+      "说明": "统一 LLM 网关，支持 Anthropic + OpenAI 双厂商",
+      "文件": "llm/client.py, llm/prompt_loader.py, llm/response_parser.py",
+      "使用方法": {
+        "客户端初始化": "client = LLMClient(provider=\"anthropic\")",
+        "自由文本输出": "result = client.chat(\"a1_tagging\", {\"company\": \"茅台\"})",
+        "结构化输出": "result = client.chat(\"prompt_name\", vars, response_schema=MyModel)",
+        "重试机制": "自动指数退避重试，鉴权失败不重试"
+      }
+    },
+    "pipeline": {
+      "说明": "流水线引擎，自动按顺序调度各层",
+      "文件": "pipeline/orchestrator.py, pipeline/context.py, pipeline/step_registry.py",
+      "关键点": "用 @registry.register(\"layer_xx\") 注册你的层，Orchestrator 自动调用",
+      "上下文传递": "所有层共享 PipelineContext，你的层往里面写数据就行"
+    },
+    "config": {
+      "说明": "权重/阈值/行业标签/字段映射/9 个 prompt 模板",
+      "README.md": "完整使用手册"
+    },
+    "tests": {
+      "说明": "25 个测试全部通过，覆盖 schemas/llm/pipeline/部分layer",
+      "测试框架": "pytest"
+    }
+  },
+
+  "二、你需要实现的 7 层（按顺序）": {
+    "执行顺序": "layer_0 → layer_a → layer_b → layer_bplus → layer_c → layer_d → layer_e",
+    "上下文数据结构": {
+      "说明": "PipelineContext 是所有层的共享数据背包",
+      "字段清单": {
+        "raw_doc": "RawDocument — 第0层写入，后面各层读取",
+        "macro_facts": "list[str] — A0层写入，D层读取",
+        "tags": "CompanyTags — A1层写入，A2和D层读取",
+        "benchmark": "Benchmark — A2层写入，C层读取",
+        "financials": "FinancialStatement — B层写入，C和B+层读取",
+        "validation_passed": "bool — B1校验结果",
+        "logic_anomalies": "list[LogicAnomaly] — B+层写入，D层读取",
+        "deviations": "list[DeviationAnomaly] — C层写入，D层读取",
+        "reasoning_results": "list[ProbabilityAssignment] — D层写入，E层读取",
+        "score": "ScoreBreakdown — E1写入",
+        "report": "Report — E2写入",
+        "errors/warnings": "list[str] — 各层可追加"
+      }
+    },
+    "各层实现要求": {
+      "第0层_PDF解析": {
+        "说明": "接入 MinerU 或 pdfplumber，将 PDF 年报解析为 RawDocument",
+        "文件": "layer_0_extract/pdf_parser.py, chunker.py, merger.py",
+        "输入": "PDF 文件路径",
+        "输出": "RawDocument（四大区块：财务数据/管理层讨论/附注/公司概况）",
+        "注意": "要处理跨页表格合并、OCR识别不准确、不同财报格式"
+      },
+      "A层_行业基准": {
+        "说明": "A0 搜索宏观事实 + A1 打行业标签 + A2 匹配同行企业",
+        "文件": "layer_a_benchmark/*.py",
+        "各函数要求": [
+          {
+            "函数": "a0_macro_search.run_macro_search()",
+            "输入": "RawDocument + A1的tags + B层的成本数据",
+            "流程": "调用 prompt a0_search_query → 生成搜索词 → SerpAPI 搜索 → 调用 prompt a0_macro_facts → 提取4维度JSON",
+            "输出": "list[str]（4维度宏观事实）",
+            "依赖": "LLMClient, 两个 prompt 文件已写好, 需要你自己接入 SerpAPI"
+          },
+          {
+            "函数": "a1_tagging.run_tagging()",
+            "输入": "RawDocument.company_overview",
+            "流程": "调用 prompt a1_tagging，让LLM输出硬标签+软标签",
+            "输出": "CompanyTags",
+            "依赖": "LLMClient, config/prompts/a1_tagging.yaml"
+          },
+          {
+            "函数": "a2_matcher.run_matching()",
+            "输入": "CompanyTags",
+            "流程": "硬标签筛选同行 → 软标签算余弦相似度 → 计算行业中位数/均值",
+            "输出": "Benchmark",
+            "依赖": "纯代码逻辑，不需要LLM"
+          }
+        ]
+      },
+      "B层_财务数据提取": {
+        "说明": "B0 LLM识别表头 → B1 Pandas提取数值 → B1 勾稽校验",
+        "文件": "layer_b_extract/*.py",
+        "各函数要求": [
+          {
+            "函数": "b0_semantic_guide.run_semantic_guide()",
+            "输入": "RawDocument.financial_data（表格OCR数据）",
+            "流程": "调用 prompt b0_semantic_guide → LLM输出表头映射",
+            "输出": "B0Guide（表名、列映射、字段映射列表）",
+            "依赖": "LLMClient, config/prompts/b0_semantic_guide.yaml"
+          },
+          {
+            "函数": "b1_extractors.run_extraction()",
+            "输入": "RawDocument.financial_data + B0Guide",
+            "流程": "用 Pandas 根据 B0Guide 的字段坐标提取数值",
+            "输出": "FinancialStatement（三大报表，元转万元等）",
+            "依赖": "纯Pandas代码，不需要LLM"
+          }
+        ],
+        "注意": "b1_validators.py 已实现（资产负债表恒等式校验），你不用改"
+      },
+      "B+层_内部逻辑校验": {
+        "说明": "3 个检查规则，发现财务异常模式",
+        "文件": "layer_bplus_internal/logic_checks.py",
+        "各函数要求": [
+          "check_net_profit_cash_ratio() — 净利润现金含量比（净现比）",
+          "check_deposit_loan_dual_high() — 存贷双高异常",
+          "check_subsidiary_fund_separation() — 子公司资金归集异常"
+        ],
+        "输出": "list[LogicAnomaly]，每个含 check_name / severity / summary",
+        "注意": "calc_severity() 已实现，你不用改"
+      },
+      "C层_MAD偏差异常": {
+        "说明": "已完整实现，你不用动",
+        "文件": "layer_c_deviation/*.py"
+      },
+      "D层_双路径推理": {
+        "说明": "对每个异常同时走两路分析：路1查原文 + 路2推演假设 → D2概率分配",
+        "文件": "layer_d_reasoning/*.py",
+        "各函数要求": [
+          {
+            "函数": "d1_lookup_notes.lookup_in_annual_report()",
+            "输入": "RawDocument（management_discussion + footnotes）+ 异常",
+            "流程": "调用 prompt d1_lookup_notes → LLM 从附注/管理层讨论中找原文解释",
+            "输出": "list[Explanation]（含 source_text + page_number）",
+            "依赖": "LLMClient, config/prompts/d1_lookup_notes.yaml"
+          },
+          {
+            "函数": "d1_hypothesis.generate_hypotheses()",
+            "输入": "异常 + macro_facts（A0产出）+ industry_tags + 偏差数据",
+            "流程": "调用 prompt d1_hypothesis → LLM基于外部情报发散假设",
+            "输出": "list[Hypothesis]（最多4种互斥假设）",
+            "依赖": "LLMClient, config/prompts/d1_hypothesis.yaml"
+          },
+          {
+            "函数": "d2_probability.run_probability_allocation()",
+            "输入": "双路径结果 + macro_facts + tags",
+            "流程": "调用 prompt d2_probability → LLM综合两路结果分配概率",
+            "输出": "list[ProbabilityAssignment]",
+            "依赖": "LLMClient, config/prompts/d2_probability.yaml"
+          }
+        ],
+        "注意": "d1_dual_path.py 编排逻辑已写好（遍历异常调路1+路2），你不用改。d2_probability 已有兜底实现"
+      },
+      "E层_输出报告": {
+        "说明": "已完整实现，你不用动",
+        "文件": "layer_e_output/*.py"
+      }
+    }
+  },
+
+  "三、关键接口规范": {
+    "如何注册你的层": {
+      "示例": [
+      ],
+      "说明": "在 layer 的 __init__.py 中用 @registry.register(\"layer_0\") 装饰 run(ctx) 函数即可"
+    },
+    "LLM 调用方式": {
+      "示例": "from llm.client import LLMClient\nclient = LLMClient(provider=\"anthropic\")\nresult = client.chat(\"prompt_name\", {\"var1\": \"value1\"})",
+      "说明": "prompt_name 对应 config/prompts/ 下的 yaml 文件名（不含 .yaml）",
+      "变量渲染": "模板中用 {{variable_name}} 占位，传 dict\n自动 Jinja2 渲染"
+    },
+    "prompt 文件清单（9个，已全部写好，你直接调用）": [
+      "a0_search_query — 生成4维度的联网搜索词",
+      "a0_macro_facts — 从搜索结果中提取4维度宏观事实",
+      "a1_tagging — 给公司打硬标签+软标签",
+      "b0_semantic_guide — 识别报表表头、字段映射、单位提取",
+      "d1_lookup_notes — 从年报附注和管理层讨论中查找异常解释",
+      "d1_hypothesis — 基于宏观事实和行业标签推演异常假设",
+      "d2_probability — 综合双路径结果分配概率",
+      "e2_report — 生成报告中的多空逻辑栈文本"
+    ],
+    "如何读配置文件": {
+      "说明": "直接 open/read 即可，yaml.safe_load() 解析",
+      "文件列表": {
+        "config/weights.yaml": "E1层打分权重",
+        "config/thresholds.yaml": "B+/C层阈值",
+        "config/financial_fields.yaml": "B0层字段映射表",
+        "config/industry_tags.yaml": "A1层标签体系"
+      }
+    },
+    "如何跑测试": {
+      "命令": "pytest -v",
+      "当前状态": "25 passed",
+      "环境": "Python 3.14, Windows",
+      "依赖安装": "pip install pydantic pandas numpy pyyaml jinja2 anthropic openai httpx pdfplumber pytest"
+    },
+    "SerpAPI 搜索集成": {
+      "说明": "A0 层需要调 SerpAPI 联网搜索，API Key 在 .env 文件配置",
+      "Key名": "SERPAPI_KEY",
+      ".env.example": "已预留该配置项"
+    }
+  },
+
+  "四、实现顺序建议（按批次）": {
+    "批次1": {
+      "任务": "第0层：PDF解析",
+      "原因": "没有原始数据，后面所有层都无法运行",
+      "文件": "pdf_parser.py, chunker.py, merger.py",
+      "预估复杂度": "⭐⭐⭐（需要处理PDF格式多样性）"
+    },
+    "批次2": {
+      "任务": "A1打标签 + B0表头识别 + B1数值提取",
+      "原因": "核心数据管道，打通后C层D层E层才能接真实数据",
+      "文件": "a1_tagging.py + b0_semantic_guide.py + b1_extractors.py",
+      "预估复杂度": "⭐⭐（LLM调用+Pandas提取）"
+    },
+    "批次3": {
+      "任务": "A2同行匹配 + B+逻辑校验 + D层推理",
+      "原因": "异常检测和归因是系统的核心价值",
+      "文件": "a2_matcher.py + logic_checks.py + d层3文件",
+      "预估复杂度": "⭐⭐⭐⭐⭐（D层LLM调用最密集）"
+    },
+    "批次4": {
+      "任务": "A0联网搜索",
+      "原因": "依赖A1的行业标签和B层的成本数据，所以放最后",
+      "文件": "a0_macro_search.py",
+      "预估复杂度": "⭐⭐（LLM+SerpAPI编排）"
+    }
+  },
+
+  "五、当前测试状态": {
+    "总数": 25,
+    "通过": 25,
+    "覆盖范围": [
+      "schemas/ — Pydantic 模型系列化",
+      "llm/ — PromptLoader 渲染、ResponseParser 解析",
+      "pipeline/ — Orchestrator 调度、StepRegistry 注册",
+      "layers/ — B1 校验逻辑、E1 评分逻辑、A2 匹配逻辑"
+    ]
+  }
+}

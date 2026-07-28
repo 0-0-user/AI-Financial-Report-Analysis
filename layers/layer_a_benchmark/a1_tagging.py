@@ -23,6 +23,123 @@ logger = logging.getLogger(__name__)
 # 加载软标签定义（用于构建 prompt 和降级匹配）
 _TAGS_CONFIG_PATH = Path("config/industry_tags.yaml")
 
+# ────────────────────────────────────────────
+# 同花顺行业分类 CSV 查表（硬标签优先路径）
+# ────────────────────────────────────────────
+
+_INDUSTRY_CSV_PATH = Path("data/industry/thf_industry_classification.csv")
+_INDUSTRY_CACHE: dict[str, dict] | None = None  # {stock_code: row}
+_NAME_INDEX: list[tuple[str, dict]] | None = None
+
+
+def _load_industry_csv() -> dict[str, dict]:
+    """惰性加载同花顺行业分类 CSV，返回 {stock_code_norm: row_dict} 字典
+
+    股票代码标准化：去除 .SH/.SZ/.BJ 后缀
+    加载时做校验：列名正确 + 行数 > 5000
+    """
+    global _INDUSTRY_CACHE, _NAME_INDEX
+    if _INDUSTRY_CACHE is not None:
+        return _INDUSTRY_CACHE
+
+    import csv
+    import io
+
+    if not _INDUSTRY_CSV_PATH.exists():
+        logger.warning(f"行业分类 CSV 不存在: {_INDUSTRY_CSV_PATH}")
+        _INDUSTRY_CACHE = {}
+        _NAME_INDEX = []
+        return _INDUSTRY_CACHE
+
+    with open(_INDUSTRY_CSV_PATH, "rb") as f:
+        raw = f.read()
+    text = raw.decode("utf-8-sig")
+
+    reader = csv.DictReader(io.StringIO(text))
+    required_cols = {"股票代码", "股票简称", "所属同花顺一级行业", "所属同花顺二级行业", "所属同花顺三级行业"}
+    if not required_cols.issubset(reader.fieldnames or []):
+        logger.warning(f"行业分类 CSV 列名不匹配: {reader.fieldnames}")
+        _INDUSTRY_CACHE = {}
+        _NAME_INDEX = []
+        return _INDUSTRY_CACHE
+
+    cache: dict[str, dict] = {}
+    name_index: list[tuple[str, dict]] = []
+    row_count = 0
+
+    for row in reader:
+        code = row["股票代码"].strip()
+        # 标准化：600519.SH → 600519
+        code_norm = code.split(".")[0]
+        entry = {
+            "code": code,
+            "name": row["股票简称"].strip(),
+            "level1": row["所属同花顺一级行业"].strip(),
+            "level2": row["所属同花顺二级行业"].strip(),
+            "level3": row["所属同花顺三级行业"].strip(),
+        }
+        cache[code_norm] = entry
+        cache[code] = entry  # 同时保留原始带后缀的 key
+        name_index.append((entry["name"], entry))
+        row_count += 1
+
+    if row_count < 5000:
+        logger.warning(f"行业分类 CSV 行数异常: {row_count}（期望 > 5000），可能被截断")
+
+    _INDUSTRY_CACHE = cache
+    _NAME_INDEX = name_index
+    logger.info(f"已加载行业分类 CSV: {row_count} 只股票, {len(set(e['level3'] for e in cache.values()))} 个三级行业")
+    return cache
+
+
+def _csv_lookup_by_code(stock_code: str) -> dict | None:
+    """按股票代码精确匹配（代码优先路径）
+
+    支持入参格式：
+    - "600519" → 匹配 CSV 中的 600519.SH
+    - "600519.SH" → 匹配 CSV 中的 600519.SH
+    """
+    if not stock_code:
+        return None
+    cache = _load_industry_csv()
+    return cache.get(stock_code.strip())
+
+
+def _csv_lookup_by_name(company_name: str) -> dict | None:
+    """按公司名模糊匹配（股票代码缺失时的备选路径）
+
+    匹配策略：CSV 中的股票简称 是否 包含在公司全称中
+    例如 company_name="贵州茅台酒股份有限公司" → 匹配简称"贵州茅台"
+    """
+    if not company_name or _NAME_INDEX is None:
+        return None
+    for short_name, entry in _NAME_INDEX:
+        if short_name in company_name or company_name in short_name:
+            return entry
+    return None
+
+
+def _csv_lookup_hard_tags(stock_code: str, company_name: str) -> list[HardTag] | None:
+    """CSV 查表获取硬标签，返回三级+二级+一级的 HardTag 列表
+
+    优先级：股票代码精确 → 公司名模糊
+    """
+    result = _csv_lookup_by_code(stock_code)
+    if not result:
+        result = _csv_lookup_by_name(company_name)
+    if result:
+        return [
+            HardTag(system="同花顺三级行业", value=result["level3"]),
+            HardTag(system="同花顺二级行业", value=result["level2"]),
+            HardTag(system="同花顺一级行业", value=result["level1"]),
+        ]
+    return None
+
+
+def _soft_tags_to_str(hard_tags: list[HardTag]) -> str:
+    """将 HardTag 列表转为简短的描述文字，用于 prompt 变量"""
+    return ", ".join(f"{t.system}={t.value}" for t in hard_tags)
+
 
 def _load_soft_tags_config() -> list[dict]:
     """加载软标签配置"""
@@ -34,15 +151,16 @@ def _load_soft_tags_config() -> list[dict]:
 
 
 def run_tagging(raw_doc: RawDocument) -> CompanyTags:
-    """大模型读取公司基本情况和行业背景，输出硬标签 + 软标签
+    """读取公司基本信息和行业背景，输出硬标签 + 软标签
 
     输入：
-        raw_doc: 第0层的 RawDocument（主要使用 company_overview 部分）
+        raw_doc: 第0层的 RawDocument
 
     流程：
-        1. 提取业务描述文本
-        2. 尝试调用 LLM 进行分类（若 SDK/API 可用）
-        3. LLM 不可用时回退到关键词规则匹配
+        1. 优先从同花顺行业分类 CSV 查表获取硬标签（代码路径）
+        2. CSV 查到硬标签 → 只问 LLM 软标签（减少 token 消耗 + 消除硬标签幻觉）
+        3. CSV 查不到 → LLM 同时输出硬标签 + 软标签（原路径）
+        4. LLM 也不可用 → 关键词规则降级（原路径）
 
     输出：
         CompanyTags（含公司名、股票代码、硬标签列表、软标签列表）
@@ -51,11 +169,34 @@ def run_tagging(raw_doc: RawDocument) -> CompanyTags:
     stock_code = raw_doc.metadata.get("stock_code", "")
     business_desc = raw_doc.company_overview.business_description or ""
     industry_text = raw_doc.company_overview.industry_classification or ""
-
-    # 合并文本供分析
     full_text = f"{company_name}\n{industry_text}\n{business_desc}"
 
-    # 尝试 LLM
+    # 第一步：CSV 查硬标签（优先路径，最准确）
+    csv_hard_tags = _csv_lookup_hard_tags(stock_code, company_name)
+    if csv_hard_tags:
+        logger.info(f"CSV 查到硬标签: {_soft_tags_to_str(csv_hard_tags)}")
+        try:
+            soft_tags = _llm_tagging(
+                company_name, stock_code, business_desc,
+                existing_hard_tags=csv_hard_tags,
+            )
+            return CompanyTags(
+                company_name=company_name,
+                stock_code=stock_code,
+                hard_tags=csv_hard_tags,
+                soft_tags=soft_tags,
+            )
+        except Exception as e:
+            logger.warning(f"CSV 查表后 LLM 软标签失败，用关键词降级: {e}")
+            soft_tags = _infer_soft_tags(full_text)
+            return CompanyTags(
+                company_name=company_name,
+                stock_code=stock_code,
+                hard_tags=csv_hard_tags,
+                soft_tags=soft_tags,
+            )
+
+    # 第二步：CSV 查不到 → LLM 硬标签 + 软标签（原完整路径）
     try:
         return _llm_tagging(company_name, stock_code, business_desc)
     except Exception as e:
@@ -67,35 +208,53 @@ def run_tagging(raw_doc: RawDocument) -> CompanyTags:
 # LLM 路径
 # ────────────────────────────────────────────
 
-def _llm_tagging(company_name: str, stock_code: str, business_desc: str) -> CompanyTags:
-    """通过 LLM 进行标签分类"""
+def _llm_tagging(
+    company_name: str,
+    stock_code: str,
+    business_desc: str,
+    existing_hard_tags: list[HardTag] | None = None,
+) -> CompanyTags | list[SoftTag]:
+    """通过 LLM 进行标签分类
+
+    两种模式：
+    - existing_hard_tags=None（默认）：LLM 输出硬标签 + 软标签，返回 CompanyTags
+    - existing_hard_tags 有值：硬标签已由 CSV 确定，LLM 只输出软标签，返回 list[SoftTag]
+    """
     from llm.client import LLMClient
 
     soft_tags_config = _load_soft_tags_config()
-    # 只传 name 和 options 给模板
     soft_tags_for_prompt = [{"name": t["name"], "options": t["options"]} for t in soft_tags_config]
 
-    client = LLMClient()
-    response = client.chat(
-        "a1_tagging",
-        {
-            "company_name": company_name,
-            "business_description": business_desc,
-            "soft_tags": soft_tags_for_prompt,
-        },
-    )
+    variables = {
+        "company_name": company_name,
+        "business_description": business_desc,
+        "soft_tags": soft_tags_for_prompt,
+    }
 
-    # 解析 LLM 返回的 JSON
+    # 如果已有硬标签（来自 CSV），传给 prompt 让 LLM 只输出软标签
+    if existing_hard_tags:
+        variables["existing_hard_tags"] = _soft_tags_to_str(existing_hard_tags)
+
+    client = LLMClient()
+    response = client.chat("a1_tagging", variables)
+
     import json
     data = _extract_json(response if isinstance(response, str) else str(response))
 
+    # 模式1：CSV 已提供硬标签 → 只解析软标签
+    if existing_hard_tags:
+        soft_tag_list = []
+        for st in data.get("soft_tags", []):
+            soft_tag_list.append(SoftTag(dimension=st["dimension"], value=st["value"]))
+        return soft_tag_list
+
+    # 模式2：LLM 同时输出硬标签 + 软标签
     hard_tag_data = data.get("hard_tag", {})
     hard_tags = [HardTag(
         system=hard_tag_data.get("system", "同花顺三级行业"),
         value=hard_tag_data.get("value", ""),
     )]
 
-    # 尝试跨体系补充硬标签
     extra_hard_tags = data.get("extra_hard_tags", [])
     for ht in extra_hard_tags:
         hard_tags.append(HardTag(system=ht.get("system", ""), value=ht.get("value", "")))

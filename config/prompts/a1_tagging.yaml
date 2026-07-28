@@ -5,18 +5,24 @@
 # 本 prompt 用于 A1 层。LLM 根据公司基本信息和业务描述，
 # 按 industry_tags.yaml 定义的标签体系打定性标签。
 #
+# 两种模式：
+#   模式1（无 existing_hard_tags）：LLM 同时输出硬标签 + 软标签
+#   模式2（有 existing_hard_tags）：硬标签已由数据源（同花顺CSV）确定，
+#          LLM 只输出软标签
+#
 # 硬标签：从同花顺三级行业分类中选择（客观分类）
 # 软标签：从给定选项中选择（商业模式特征）
 #
 # 模板变量：
-#   company_name:       公司名称
-#   business_description: 公司主营业务描述（来自年报原文）
-#   soft_tags:          软标签维度列表（从 industry_tags.yaml 加载）
+#   company_name:          公司名称
+#   business_description:  公司主营业务描述（来自年报原文）
+#   soft_tags:             软标签维度列表（从 industry_tags.yaml 加载）
+#   existing_hard_tags:    可选。如果已从 CSV 查到硬标签，传进来让 LLM 只输出软标签
 #
 # 输出格式：JSON（包含硬标签 + 软标签列表）
 #
 # 被谁使用：layers/layer_a_benchmark/a1_tagging.py
-
+#
 name: a1_tagging
 description: "给公司打行业定性标签"
 
@@ -28,6 +34,10 @@ messages:
       注意：
       - 硬标签必须从同花顺三级行业分类中选择
       - 软标签只能从给定的选项中选择，不能自创
+      {% if existing_hard_tags %}
+      - 该公司的行业分类已由权威数据源确定：{{ existing_hard_tags }}
+      - 你不再需要输出 hard_tag，只需输出 soft_tags
+      {% endif %}
 
   - role: user
     content: |
@@ -39,8 +49,11 @@ messages:
       - {{tag.name}}：可选值 {{tag.options | join(", ")}}
       {% endfor %}
 
-      请输出 JSON 格式：
+      请输出 JSON 格式：{% if existing_hard_tags %}
+      {
+        "soft_tags": [{"dimension": "资产结构", "value": "重资产"}]
+      }{% else %}
       {
         "hard_tag": {"system": "同花顺三级行业", "value": "..."},
         "soft_tags": [{"dimension": "...", "value": "..."}]
-      }
+      }{% endif %}

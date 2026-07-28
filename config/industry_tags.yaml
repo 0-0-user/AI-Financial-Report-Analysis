@@ -18,6 +18,11 @@
 #
 # 由谁维护：分析师（可增加软标签维度或选项）
 # 被谁使用：A1 层（layers/layer_a_benchmark/a1_tagging.py）
+#
+# 同花顺行业分类数据源（A1 层优先从 CSV 查表，查不到才走 LLM）：
+#   路径: data/industry/thf_industry_classification.csv
+#   来源: 同花顺 iFinD
+#   覆盖: 5536 只 A 股，257 个三级行业
 
 # ────────────────────────────────────────────
 # 硬标签：多套行业分类体系

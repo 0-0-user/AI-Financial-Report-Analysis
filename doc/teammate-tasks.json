@@ -86,8 +86,9 @@
           {
             "函数": "a1_tagging.run_tagging()",
             "输入": "RawDocument.company_overview",
-            "流程": "调用 prompt a1_tagging，让LLM输出硬标签+软标签",
+            "流程": "① 优先从 data/industry/thf_industry_classification.csv 通过股票代码查表（已实现代码路径，你不需要改）→ ② CSV 查到硬标签则 LLM 只打软标签 → ③ CSV 查不到则 LLM 同时出硬标签+软标签 → ④ 关键词规则降级",
             "输出": "CompanyTags",
+            "注意": "CSV 查表逻辑已由我写好（_csv_lookup_hard_tags / _csv_lookup_by_code / _csv_lookup_by_name），你不需要改。你只需要实现 CSV 路径不存在时的 LLM 调用（该部分已有 TODO 标记）",
             "依赖": "LLMClient, config/prompts/a1_tagging.yaml"
           },
           {

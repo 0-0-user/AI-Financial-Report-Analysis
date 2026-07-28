@@ -19,8 +19,8 @@ class TestPromptLoader:
     def test_load_existing_prompt(self):
         """应能加载存在的 prompt 文件"""
         loader = PromptLoader("config/prompts")
-        prompt = loader.load("a0_macro_search")
-        assert prompt["name"] == "a0_macro_search"
+        prompt = loader.load("a0_macro_facts")
+        assert prompt["name"] == "a0_macro_facts"
 
     def test_load_nonexistent_prompt(self):
         """不存在的 prompt 应报错"""
@@ -31,12 +31,12 @@ class TestPromptLoader:
     def test_render_with_variables(self):
         """模板渲染应正确填充变量"""
         loader = PromptLoader("config/prompts")
-        messages = loader.render("a0_macro_search", {
-            "search_query": "test",
-            "search_results": "result_data",
+        messages = loader.render("a0_macro_facts", {
+            "business_desc": "白酒生产销售",
+            "industry_tags": "白酒",
+            "search_results": "行业数据",
         })
         # render() 返回 list[dict]，每条含 role 和 content
         assert len(messages) > 0
         all_text = " ".join(m["content"] for m in messages)
-        assert "test" in all_text
-        assert "result_data" in all_text
+        assert "白酒生产销售" in all_text

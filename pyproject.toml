@@ -12,6 +12,7 @@ dependencies = [
     "anthropic>=0.30",
     "openai>=1.0",
     "httpx>=0.25",
+    "akshare>=1.18",
 ]
 
 [project.optional-dependencies]

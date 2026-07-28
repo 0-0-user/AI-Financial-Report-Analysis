@@ -269,10 +269,13 @@ def _format_industry_tags(ctx: PipelineContext) -> str:
         parts.append("硬标签: " + "; ".join(
             f"{h.system}={h.value}" for h in tags.hard_tags
         ))
-    if tags.soft_tags:
-        parts.append("软标签: " + "; ".join(
-            f"{s.dimension}={s.value}" for s in tags.soft_tags
-        ))
+    if tags.financial_profile and tags.financial_profile.levels:
+        from schemas.tags import FINANCIAL_DIMENSIONS
+        profile_items = [
+            f"{FINANCIAL_DIMENSIONS[i]}={lv}"
+            for i, lv in enumerate(tags.financial_profile.levels)
+        ]
+        parts.append("财务画像: " + " | ".join(profile_items))
     return "\n".join(parts)
 
 
@@ -309,17 +312,20 @@ def _extract_downstream(ctx: PipelineContext) -> str:
     """推断下游领域"""
     # 从公司概要和标签推断
     desc = ctx.raw_doc.company_overview.business_description if ctx.raw_doc else ""
-    if ctx.tags:
-        customer_type = ""
-        for st in ctx.tags.soft_tags:
-            if st.dimension == "客户类型":
-                customer_type = st.value
-        if customer_type == "To-C":
-            return f"终端消费者（{desc[:50]}）"
-        elif customer_type == "To-B":
-            return f"企业客户（{desc[:50]}）"
-        elif customer_type == "To-G":
-            return "政府及公共事业单位"
+    if ctx.tags and ctx.tags.financial_profile:
+        # v5.0: 从财务数字画像推断下游（高销售费用率 ≈ To-C，低≈To-B）
+        fp = ctx.tags.financial_profile
+        try:
+            sales_idx = 5  # 销售费用率是第6维
+            sales_level = fp.levels[sales_idx] if len(fp.levels) > sales_idx else ""
+            if sales_level in ("极高", "高"):
+                return f"终端消费者（{desc[:50]}）"
+            elif sales_level in ("中高", "中等"):
+                return f"混合客户（{desc[:50]}）"
+            else:
+                return f"企业/政府客户（{desc[:50]}）"
+        except (IndexError, AttributeError):
+            pass
     return f"请根据公司业务描述推断（{desc[:80]}）"
 
 

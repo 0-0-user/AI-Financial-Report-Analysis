@@ -99,3 +99,115 @@ fields:
       - "销售商品收到的现金"
     type: "cashflow"
     description: "销售商品收到的现金"
+
+  # ── 资产负债新增字段 ──
+  Accounts_Receivable:
+    chinese_variants:
+      - "应收账款"
+      - "应收账款余额"
+      - "应收账款净额"
+    type: "balance_sheet"
+    description: "应收账款"
+
+  Inventory:
+    chinese_variants:
+      - "存货"
+      - "存货余额"
+      - "存货净额"
+    type: "balance_sheet"
+    description: "存货"
+
+  Intangible_Assets:
+    chinese_variants:
+      - "无形资产"
+      - "无形资产净额"
+    type: "balance_sheet"
+    description: "无形资产"
+
+  Goodwill:
+    chinese_variants:
+      - "商誉"
+      - "商誉净额"
+    type: "balance_sheet"
+    description: "商誉"
+
+  Short_Term_Borrowing:
+    chinese_variants:
+      - "短期借款"
+      - "短期贷款"
+    type: "balance_sheet"
+    description: "短期借款"
+
+  Long_Term_Borrowing:
+    chinese_variants:
+      - "长期借款"
+      - "长期贷款"
+    type: "balance_sheet"
+    description: "长期借款"
+
+  Bonds_Payable:
+    chinese_variants:
+      - "应付债券"
+    type: "balance_sheet"
+    description: "应付债券"
+
+  Noncurrent_Due_Within_Year:
+    chinese_variants:
+      - "一年内到期的非流动负债"
+      - "一年内到期非流动负债"
+    type: "balance_sheet"
+    description: "一年内到期的非流动负债"
+
+  Retained_Earnings_End:
+    chinese_variants:
+      - "未分配利润"
+      - "期末未分配利润"
+    type: "balance_sheet"
+    description: "期末未分配利润"
+
+  Retained_Earnings_Begin:
+    chinese_variants:
+      - "期初未分配利润"
+      - "年初未分配利润"
+    type: "balance_sheet"
+    description: "期初未分配利润"
+
+  Dividends_Payable:
+    chinese_variants:
+      - "应付股利"
+      - "应付普通股股利"
+    type: "balance_sheet"
+    description: "应付股利/分红"
+
+  # ── 利润表新增字段 ──
+  Recurring_Net_Profit:
+    chinese_variants:
+      - "扣除非经常性损益后的净利润"
+      - "扣非净利润"
+      - "归属于上市公司股东的扣除非经常性损益的净利润"
+    type: "profit_loss"
+    description: "扣非净利润"
+
+  Asset_Impairment_Loss:
+    chinese_variants:
+      - "资产减值损失"
+      - "信用减值损失"
+      - "资产减值"
+    type: "profit_loss"
+    description: "资产减值损失"
+
+  Related_Party_Revenue:
+    chinese_variants:
+      - "关联方销售收入"
+      - "向关联方销售"
+      - "关联交易收入"
+    type: "profit_loss"
+    description: "关联方销售金额"
+
+  # ── 现金流量表新增 ──
+  Free_Cash_Flow:
+    chinese_variants:
+      - "自由现金流"
+      - "经营活动现金流净额减资本支出"
+    type: "cashflow"
+    description: "自由现金流"

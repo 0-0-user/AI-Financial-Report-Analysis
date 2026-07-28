@@ -44,6 +44,7 @@ class TableGuide(BaseModel):
     overall_unit: str = "元"                     # 报表整体单位
     columns: list[ColumnHeader]                  # 各列描述
     field_mappings: list[FieldMapping]           # 字段映射列表
+    layout: str = "row_major"                   # 布局: row_major(科目在行) | column_major(科目在列)
 
 
 class B0Guide(BaseModel):

@@ -211,3 +211,250 @@ fields:
       - "经营活动现金流净额减资本支出"
     type: "cashflow"
     description: "自由现金流"
+
+  # ═══════════════════════════════════════════════
+  # 银行业专用字段
+  # ═══════════════════════════════════════════════
+  Net_Interest_Income:
+    chinese_variants:
+      - "利息净收入"
+      - "净利息收入"
+      - "利息收入净额"
+    english_variants:
+      - "Net Interest Income"
+      - "Interest Income, Net"
+    type: "profit_loss"
+    description: "利息净收入（银行核心收入）"
+
+  Net_Fee_Commission_Income:
+    chinese_variants:
+      - "手续费及佣金净收入"
+      - "手续费净收入"
+      - "中间业务净收入"
+    english_variants:
+      - "Net Fee and Commission Income"
+    type: "profit_loss"
+    description: "手续费及佣金净收入"
+
+  Non_Interest_Income:
+    chinese_variants:
+      - "非利息收入"
+    english_variants:
+      - "Non-Interest Income"
+    type: "profit_loss"
+    description: "非利息收入合计"
+
+  Gross_Loans:
+    chinese_variants:
+      - "发放贷款和垫款"
+      - "贷款总额"
+      - "客户贷款及垫款"
+    english_variants:
+      - "Gross Loans and Advances"
+      - "Total Loans"
+    type: "balance_sheet"
+    description: "贷款总额（银行核心资产）"
+
+  Customer_Deposits:
+    chinese_variants:
+      - "吸收存款"
+      - "客户存款"
+      - "存款总额"
+    english_variants:
+      - "Customer Deposits"
+      - "Total Deposits"
+    type: "balance_sheet"
+    description: "客户存款（银行核心负债）"
+
+  NPL_Ratio:
+    chinese_variants:
+      - "不良贷款率"
+      - "不良率"
+    english_variants:
+      - "Non-Performing Loan Ratio"
+      - "NPL Ratio"
+    type: "balance_sheet"
+    description: "不良贷款率"
+
+  Provision_Coverage_Ratio:
+    chinese_variants:
+      - "拨备覆盖率"
+      - "贷款拨备率"
+    english_variants:
+      - "Provision Coverage Ratio"
+    type: "balance_sheet"
+    description: "拨备覆盖率（贷款损失准备/不良贷款）"
+
+  NIM:
+    chinese_variants:
+      - "净息差"
+      - "净利差"
+    english_variants:
+      - "Net Interest Margin"
+    type: "profit_loss"
+    description: "净息差（银行盈利核心指标）"
+
+  CAR:
+    chinese_variants:
+      - "资本充足率"
+      - "核心一级资本充足率"
+    english_variants:
+      - "Capital Adequacy Ratio"
+      - "CAR"
+    type: "balance_sheet"
+    description: "资本充足率"
+
+  # ═══════════════════════════════════════════════
+  # 保险业专用字段
+  # ═══════════════════════════════════════════════
+  Gross_Premiums_Written:
+    chinese_variants:
+      - "保险业务收入"
+      - "保费收入"
+      - "原保费收入"
+    english_variants:
+      - "Gross Premiums Written"
+      - "Insurance Revenue"
+    type: "profit_loss"
+    description: "保费收入（保险核心收入）"
+
+  Earned_Premiums:
+    chinese_variants:
+      - "已赚保费"
+    english_variants:
+      - "Earned Premiums"
+    type: "profit_loss"
+    description: "已赚保费"
+
+  Claims_Paid:
+    chinese_variants:
+      - "赔付支出"
+      - "赔款支出"
+    english_variants:
+      - "Claims Paid"
+      - "Claims Incurred"
+    type: "profit_loss"
+    description: "赔付支出"
+
+  Combined_Ratio:
+    chinese_variants:
+      - "综合成本率"
+      - "综合赔付率"
+    english_variants:
+      - "Combined Ratio"
+    type: "profit_loss"
+    description: "综合成本率（赔付率+费用率，<100%为承保盈利）"
+
+  Investment_Income:
+    chinese_variants:
+      - "投资收益"
+      - "投资收入"
+    english_variants:
+      - "Investment Income"
+    type: "profit_loss"
+    description: "投资收益（保险利润重要来源）"
+
+  Insurance_Reserves:
+    chinese_variants:
+      - "保险责任准备金"
+      - "未到期责任准备金"
+    english_variants:
+      - "Insurance Reserves"
+      - "Policyholder Reserves"
+    type: "balance_sheet"
+    description: "保险准备金（保险核心负债）"
+
+  Solvency_Ratio:
+    chinese_variants:
+      - "偿付能力充足率"
+      - "综合偿付能力充足率"
+    english_variants:
+      - "Solvency Ratio"
+    type: "balance_sheet"
+    description: "偿付能力充足率"
+
+  # ═══════════════════════════════════════════════
+  # 证券/金融业通用
+  # ═══════════════════════════════════════════════
+  Trading_Income:
+    chinese_variants:
+      - "交易性金融资产收益"
+      - "交易收入"
+      - "自营业务收入"
+    english_variants:
+      - "Trading Income"
+    type: "profit_loss"
+    description: "交易性收入（券商核心收入）"
+
+  # ═══════════════════════════════════════════════
+  # 英文变体（港股/美股）
+  # 以下字段已有中文变体，补充英文变体
+  # ═══════════════════════════════════════════════
+  field_english_aliases:
+    Revenue_Total:
+      - "Revenue"
+      - "Total Revenue"
+      - "Sales"
+      - "Net Sales"
+    Cost_Revenue:
+      - "Cost of Revenue"
+      - "Cost of Sales"
+      - "Cost of Goods Sold"
+    Gross_Profit:
+      - "Gross Profit"
+    Net_Profit:
+      - "Net Income"
+      - "Net Profit"
+      - "Net Earnings"
+      - "Profit Attributable to Shareholders"
+    Total_Assets:
+      - "Total Assets"
+    Total_Liabilities:
+      - "Total Liabilities"
+    Equity_Total:
+      - "Total Equity"
+      - "Shareholders' Equity"
+      - "Stockholders' Equity"
+    Monetary_Funds:
+      - "Cash and Cash Equivalents"
+      - "Cash at Bank"
+    Accounts_Receivable:
+      - "Accounts Receivable"
+      - "Trade Receivables"
+    Inventory:
+      - "Inventory"
+      - "Inventories"
+    Intangible_Assets:
+      - "Intangible Assets"
+    Goodwill:
+      - "Goodwill"
+    Short_Term_Borrowing:
+      - "Short-Term Borrowings"
+      - "Short-Term Debt"
+    Long_Term_Borrowing:
+      - "Long-Term Borrowings"
+      - "Long-Term Debt"
+    Operating_Cash_Flow:
+      - "Net Cash from Operating Activities"
+      - "Cash Flow from Operations"
+    Operating_Cash_Inflow:
+      - "Cash Received from Customers"
+    Retained_Earnings_End:
+      - "Retained Earnings"
+
+  # ═══════════════════════════════════════════════
+  # 小微企业/新三板简版报表
+  # ═══════════════════════════════════════════════
+  small_enterprise_aliases:
+    营业收入: "Revenue_Total"
+    营业成本: "Cost_Revenue"
+    利润总额: "Net_Profit"
+    资产总计: "Total_Assets"
+    负债合计: "Total_Liabilities"
+    所有者权益: "Equity_Total"
+    货币资金: "Monetary_Funds"
+    应收账款: "Accounts_Receivable"
+    存货: "Inventory"
+    短期借款: "Short_Term_Borrowing"
+    长期借款: "Long_Term_Borrowing"
+    经营现金流: "Operating_Cash_Flow"

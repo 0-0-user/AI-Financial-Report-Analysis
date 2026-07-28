@@ -4,12 +4,12 @@
 ==========================================================
 
 测试 A2 层同行匹配算法：
-- 硬标签应精确锁定行业范围（如"白酒"只能匹配到白酒同行）
-- 软标签相似度计算是否正确
+- 硬标签应精确锁定行业范围
+- 余弦相似度计算是否正确
 """
 
 import pytest
-from schemas.tags import HardTag, SoftTag, CompanyTags
+from schemas.tags import HardTag, FinancialProfile, CompanyTags
 
 
 class TestPeerMatching:
@@ -17,75 +17,38 @@ class TestPeerMatching:
 
     def test_hard_tag_filter(self):
         """硬标签应精确锁定行业"""
-        # 构造两个不同行业的标签
         baijiu_tags = CompanyTags(
             company_name="茅台",
             stock_code="600519",
             hard_tags=[
-                HardTag(system="同花顺行业", value="食品饮料"),
-                HardTag(system="申万行业", value="白酒III"),
-            ],
-            soft_tags=[
-                SoftTag(dimension="资产结构", value="轻资产"),
+                HardTag(system="同花顺三级行业", value="白酒"),
+                HardTag(system="同花顺二级行业", value="饮料制造"),
             ],
         )
         real_estate_tags = CompanyTags(
             company_name="万科",
             stock_code="000002",
             hard_tags=[
-                HardTag(system="同花顺行业", value="房地产"),
-                HardTag(system="申万行业", value="房地产开发"),
-            ],
-            soft_tags=[
-                SoftTag(dimension="资产结构", value="重资产"),
+                HardTag(system="同花顺三级行业", value="房地产开发"),
+                HardTag(system="同花顺二级行业", value="房地产"),
             ],
         )
         # 验证硬标签不同
         baijiu_industry = [t.value for t in baijiu_tags.hard_tags]
         real_estate_industry = [t.value for t in real_estate_tags.hard_tags]
         assert baijiu_industry != real_estate_industry
-        assert "白酒III" in baijiu_industry
+        assert "白酒" in baijiu_industry
         assert "房地产开发" in real_estate_industry
 
-    def test_soft_tag_similarity(self):
-        """软标签相似度计算"""
-        tags_a = CompanyTags(
-            company_name="公司A",
-            stock_code="000001",
-            hard_tags=[HardTag(system="行业", value="白酒")],
-            soft_tags=[
-                SoftTag(dimension="资产结构", value="轻资产"),
-                SoftTag(dimension="商业模式", value="品牌驱动"),
-                SoftTag(dimension="客户类型", value="To-C"),
-            ],
-        )
-        tags_b = CompanyTags(
-            company_name="公司B",
-            stock_code="000002",
-            hard_tags=[HardTag(system="行业", value="白酒")],
-            soft_tags=[
-                SoftTag(dimension="资产结构", value="轻资产"),
-                SoftTag(dimension="商业模式", value="品牌驱动"),
-                SoftTag(dimension="客户类型", value="To-C"),
-            ],
-        )
-        # 完全相同的软标签
-        soft_a = {s.dimension: s.value for s in tags_a.soft_tags}
-        soft_b = {s.dimension: s.value for s in tags_b.soft_tags}
-        shared = sum(1 for k in soft_a if k in soft_b and soft_a[k] == soft_b[k])
-        assert shared == 3  # 3个标签完全匹配
+    def test_financial_profile_numeric(self):
+        """FinancialProfile 数值映射应正确"""
+        fp = FinancialProfile(levels=["极高", "极高", "低", "低", "低", "高"])
+        expected = [1.0, 1.0, 0.2, 0.2, 0.2, 0.8]
+        assert fp.as_numeric == expected
 
-        # 构造一个不同标签做对比
-        tags_c = CompanyTags(
-            company_name="公司C",
-            stock_code="000003",
-            hard_tags=[HardTag(system="行业", value="白酒")],
-            soft_tags=[
-                SoftTag(dimension="资产结构", value="重资产"),
-                SoftTag(dimension="商业模式", value="成本驱动"),
-                SoftTag(dimension="客户类型", value="To-B"),
-            ],
-        )
-        soft_c = {s.dimension: s.value for s in tags_c.soft_tags}
-        shared_with_c = sum(1 for k in soft_a if k in soft_c and soft_a[k] == soft_c[k])
-        assert shared_with_c == 0  # 完全不同
+    def test_financial_profile_empty_levels(self):
+        """未知等级应映射为 0.0"""
+        fp = FinancialProfile(levels=["极高", "未知", "低", "低", "低", "高"])
+        nums = fp.as_numeric
+        assert nums[1] == 0.0  # "未知" 映射为 0
+        assert nums[0] == 1.0

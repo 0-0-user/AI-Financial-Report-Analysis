@@ -1,0 +1,742 @@
+{
+  "schema_version": "1.0",
+  "document": {
+    "title": "AI+金融财报分析系统完整全栈框架",
+    "version": "5.0",
+    "description": "利用大模型能力对上市公司年报进行解读，从财务报表、行业性质等角度分析企业年度经营情况、发展前景与投资价值。"
+  },
+
+  "core_principles": [
+    {
+      "id": "principle_llm",
+      "role": "大模型（LLM）",
+      "responsibilities": [
+        "理解文字、打标签、逻辑推演、检索信息",
+        "画财务数字画像（6维等级）",
+        "从联网搜索结果中提取宏观事实",
+        "从年报原文查找异常解释",
+        "基于外部情报发散假设",
+        "综合多路结果分配概率"
+      ],
+      "prohibitions": ["不参与任何数学计算"],
+      "rationale": "隔离计算风险，避免LLM产生数值幻觉"
+    },
+    {
+      "id": "principle_code",
+      "role": "代码",
+      "responsibilities": [
+        "提取数字、换算单位",
+        "勾稽校验",
+        "余弦相似度匹配同行",
+        "MAD偏差计算",
+        "概率分配评分"
+      ],
+      "prohibitions": ["不进行任何语义理解"],
+      "rationale": "隔离语义风险，代码只做确定性的机械操作"
+    },
+    {
+      "id": "principle_csv_first",
+      "role": "硬标签查表优先",
+      "description": "客观行业分类（同花顺三级/二级行业）从CSV数据源查表确定，5536只A股全覆盖",
+      "detail": "LLM只在CSV查不到时才降级推断。CSV查到时LLM只输出6维财务等级数组，节省token并消除硬标签幻觉"
+    },
+    {
+      "id": "principle_vector_matching",
+      "role": "同行匹配用向量而非文本",
+      "description": "A2层不再依赖定性软标签做Jaccard文本匹配，改为基于6维财务等级向量的余弦相似度",
+      "detail": "LLM画出数字画像，代码做纯数学定位"
+    }
+  ],
+
+  "implementation_flow": [
+    {"step": 1, "action": "先看行业定性并画数字画像（A1层：CSV查硬标签 + LLM画6维财务等级）"},
+    {"step": 2, "action": "再用向量匹配找同行基准（A2层：余弦相似度找Top 5 + Top 20%）"},
+    {"step": 3, "action": "提取财务数据并校验（B层：表头映射→取数→勾稽校验）"},
+    {"step": 4, "action": "发现异常偏差（B+层逻辑初筛 + C层MAD偏差检测）"},
+    {"step": 5, "action": "结合财报原文和外部宏观情报找原因（D层双路径推理）"},
+    {"step": 6, "action": "给出概率化的综合判断并输出报告（E层打分+报告）"}
+  ],
+
+  "design_rules": {
+    "separation_of_concerns": "大模型、代码、数学计算三者严格分工，互不越界",
+    "data_flow": "流水线式：每一层的输出是下一层的输入，层间通过标准化的PipelineContext传递数据",
+    "hard_tag_priority": "行业分类CSV查表优先于LLM推断，查不到才走LLM降级",
+    "a2_peer_matching": "二级行业池 + 余弦相似度 + 双池输出（Top 5展示 + Top 20% MAD基准）",
+    "error_propagation": "B1层勾稽校验失败 → 阻断流水线 → 在E层输出系统异常报告"
+  },
+
+  "layers": [
+    {
+      "id": "layer_0",
+      "name": "第0层：PDF数据提取",
+      "emoji": "📄",
+      "task": "把一份几百页的上市公司年度报告PDF，拆解成电脑能直接读懂的JSON格式文件",
+      "implementation": {
+        "tool": "开源工具 MinerU / pdfplumber",
+        "method": "自动解析PDF并切分"
+      },
+      "output": {
+        "format": "JSON文件",
+        "contains": {
+          "financial_data": {
+            "description": "财务数据部分",
+            "contents": "三大报表的表格原始数据（通常是OCR识别后的文本格式）"
+          },
+          "management_discussion": {
+            "description": "管理层讨论与分析部分",
+            "contents": "全是文字，描述公司去年的经营情况、风险等"
+          },
+          "footnotes": {
+            "description": "附注明细部分",
+            "contents": "表格辅助信息，比如存货的具体构成"
+          },
+          "company_overview": {
+            "description": "公司基本情况部分",
+            "contents": "公司的主营业务介绍、行业分类归属"
+          }
+        }
+      }
+    },
+
+    {
+      "id": "layer_a",
+      "name": "A层：找对比基准（行业定性 + 数字画像）",
+      "emoji": "🔍",
+      "sub_layers": [
+        {
+          "id": "a0",
+          "name": "A0层：外部宏观情报提取",
+          "task": "从互联网获取该公司的行业宏观背景信息，作为D1路2发散假设的外部知识源",
+          "implementation": {
+            "method": "两段式prompt + SerpAPI",
+            "stages": [
+              {
+                "stage": 1,
+                "name": "搜索词生成",
+                "prompt": "a0_search_query",
+                "action": "LLM根据公司信息生成4个维度的搜索词",
+                "dimensions": ["宏观周期与政策", "上游原材料供需", "下游终端需求", "宏观黑天鹅"],
+                "rules": ["每维度至少3条", "含'今年'时间词", "不输出归因结论", "不出现主观判断词"]
+              },
+              {
+                "stage": 2,
+                "name": "联网搜索",
+                "tool": "SerpAPI",
+                "action": "代码用搜索词调用SerpAPI，获取原始搜索结果"
+              },
+              {
+                "stage": 3,
+                "name": "宏观事实提取",
+                "prompt": "a0_macro_facts",
+                "action": "LLM从搜索结果中提取结构化事实",
+                "extraction_rules": {
+                  "extract": ["价格涨跌幅", "供需变化", "政策文件", "客观数据"],
+                  "filter_out": ["强烈看好/强烈卖出等主观推荐语"],
+                  "required_fields": ["事实描述", "来源", "日期"],
+                  "conflict_handling": "数据冲突时留空不输出"
+                }
+              }
+            ]
+          },
+          "input": "公司名称 + 行业信息（来自A1的tags + B层的成本数据）",
+          "output": "4个维度的宏观事实列表，每条含事实描述、来源、日期"
+        },
+        {
+          "id": "a1",
+          "name": "A1层：语义提取与打标签 + 财务数字画像",
+          "task": "LLM读JSON里的文字部分，做两件事：①给出客观行业分类（硬标签）②给出6维财务特征等级（数字画像）",
+          "input": "JSON中的公司基本情况 + 行业背景文字",
+          "hard_tag_priority": {
+            "description": "同花顺三级行业CSV查表优先",
+            "path_1": {"priority": 1, "method": "CSV股票代码精确匹配", "coverage": "5536只A股全量覆盖"},
+            "path_2": {"priority": 2, "method": "CSV公司名模糊匹配（简称vs全称）", "coverage": "~95%"},
+            "path_3": {"priority": 3, "method": "LLM同时输出硬标签+等级", "trigger": "CSV查不到"},
+            "path_4": {"priority": 4, "method": "关键词规则降级", "trigger": "LLM不可用"}
+          },
+          "output": {
+            "hard_tags": {
+              "description": "硬标签——同花顺三级行业分类",
+              "examples": ["白酒", "光伏制造设备", "锂电池", "CXO/医药外包"]
+            },
+            "financial_profile": {
+              "description": "财务数字画像——6维特征等级数组（核心变更）",
+              "dimensions": ["毛利率水平", "净利率水平", "总资产周转率", "资产负债率", "研发费用率", "销售费用率"],
+              "thresholds": {
+                "毛利率水平": {"极高": ">70%", "中高": "40%-70%", "中等": "20%-40%", "低": "<20%"},
+                "净利率水平": {"极高": ">30%", "中高": "15%-30%", "中等": "5%-15%", "低": "<5%"},
+                "总资产周转率": {"极高": ">1.5次", "高": "1-1.5次", "中": "0.5-1次", "低": "<0.5次"},
+                "资产负债率": {"极高": ">80%", "高": "60%-80%", "中": "30%-60%", "低": "<30%"},
+                "研发费用率": {"极高": ">15%", "高": "8%-15%", "中": "3%-8%", "低": "<3%"},
+                "销售费用率": {"极高": ">40%", "高": "20%-40%", "中": "10%-20%", "低": "<10%"}
+              },
+              "output_format": "[\"极高\", \"极高\", \"低\", \"低\", \"低\", \"高\"]（不加任何解释文字）",
+              "numeric_mapping_for_a2": {"极高": 1.0, "高": 0.8, "中高": 0.8, "中等": 0.5, "中": 0.5, "低": 0.2}
+            }
+          },
+          "note": "不再输出16维定性软标签。SoftTag已从schema中移除。硬标签仅保留同花顺体系，不交叉验证"
+        },
+        {
+          "id": "a2",
+          "name": "A2层：财务数字画像匹配同行（纯代码向量运算）",
+          "task": "基于A1的6维财务数字画像，在同行业中找最相似的企业，计算横向基准",
+          "design_changes": {
+            "old": "三级行业 + Jaccard文本匹配（依赖同行软标签，数据不可得）",
+            "new": "二级行业 + 余弦相似度向量匹配（财务数据从akshare实时获取+内存缓存）"
+          },
+          "steps": [
+            {
+              "step": 1,
+              "name": "锁定同行池",
+              "method": "从同花顺二级行业（非三级）过滤出全部公司。三级行业过细（257个），二级行业样本更充足"
+            },
+            {
+              "step": 2,
+              "name": "获取财务数据",
+              "method": "通过akshare实时获取+内存缓存（不写磁盘），每家公司取5年（不足取满）的6个财务指标"
+            },
+            {
+              "step": 3,
+              "name": "映射等级数组",
+              "method": "每年数据按阈值映射为6维等级数组，得到N个[6]数组"
+            },
+            {
+              "step": 4,
+              "name": "多年合并",
+              "method": "逐维取中位数合并为1个[6]等级数组（中位数抗暴雷，优于均值）"
+            },
+            {
+              "step": 5,
+              "name": "数值映射",
+              "method": "等级→数值：极高=1.0，高/中高=0.8，中等=0.5，低=0.2"
+            },
+            {
+              "step": 6,
+              "name": "余弦相似度排序",
+              "method": "计算目标公司与所有同行的余弦相似度（看形状而非绝对大小），降序排列"
+            },
+            {
+              "step": 7,
+              "name": "双池输出",
+              "method": "Top 5→E层横向对比展示；Top 20%（保底5）→C层MAD基准。同行数<10时合并两层"
+            }
+          ],
+          "edge_cases": {
+            "no_financial_profile": "返回空基准，跳过MAD",
+            "pool_too_small": "同行数<5时返回空基准，跳过MAD",
+            "akshare_failure": "日志警告，返回空基准"
+          },
+          "output": "Benchmark（Top 5同行列表 + 横向中位数 + 行业信息）"
+        }
+      ]
+    },
+
+    {
+      "id": "layer_b",
+      "name": "B层：提取财务数据",
+      "emoji": "📊",
+      "sub_layers": [
+        {
+          "id": "b0",
+          "name": "B0层：表头语义指引",
+          "task": "大模型只看财务报表的表头文字，分辨表格名称和单位",
+          "restriction": "不接触任何数值数据",
+          "output": {
+            "unified_field_names": {
+              "description": "统一字段名",
+              "examples": ["'营业收入'、'营业总收入' → Revenue_Total"]
+            },
+            "unit": "提取单位（元/万元/千元）",
+            "report_type": "报表类型（合并报表 / 母公司报表）"
+          }
+        },
+        {
+          "id": "b1",
+          "name": "B1层：代码准确提取表格数据与勾稽校验",
+          "task": "纯代码（Pandas）根据B0指引，定位到表格的具体行和列，抓取数字",
+          "sub_tasks": [
+            {
+              "name": "单位换算",
+              "method": "把单位统一换算成'元'",
+              "example": "原来单位是万元，抓出数字后代码自动乘10000"
+            },
+            {
+              "name": "勾稽关系校验",
+              "method": "代码提取完毕后，校验最基础的会计恒等式",
+              "checks": [
+                "资产总计 = 负债合计 + 所有者权益合计",
+                "期末未分配利润 ≈ 期初未分配利润 + 本期净利润 - 本期分红"
+              ]
+            }
+          ],
+          "branching": {
+            "validation_failed": {
+              "condition": "勾稽校验失败",
+              "action": "直接跳过B+/C/D三层，在E层输出系统异常阻断报告",
+              "output_message": "【系统异常阻断：PDF数据源损坏或低劣造假，请人工核验原文件】"
+            },
+            "validation_passed": {
+              "condition": "勾稽校验成功",
+              "action": "数据传给下一层",
+              "additional": "母公司报表的货币资金、负债数据单独提取备用"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "id": "layer_bplus",
+      "name": "B+层：内部逻辑检查（财务异常初筛）",
+      "emoji": "⚠️",
+      "task": "用代码查财报数据有没有'逻辑硬伤'",
+      "implementation": "纯代码，不涉及LLM",
+      "indicators": [
+        {
+          "id": "bplus_1",
+          "name": "净现比/收现比",
+          "formula": {
+            "net_profit_cash_ratio": "经营活动现金流净额 / 净利润",
+            "cash_revenue_ratio": "销售商品收到的现金 / 营业收入"
+          },
+          "threshold": "两个比值都显著低于0.6",
+          "anomaly_type": "利润含金量低"
+        },
+        {
+          "id": "bplus_2",
+          "name": "存贷双高",
+          "formula": {
+            "monetary_funds": "货币资金总额",
+            "interest_bearing_debt": "有息负债总额"
+          },
+          "condition": "两者同时处于高位",
+          "anomaly_type": "存贷双高可疑"
+        },
+        {
+          "id": "bplus_3",
+          "name": "母子资金分离度",
+          "formula": "合并报表货币资金 - 母公司报表货币资金",
+          "condition": "差值极大",
+          "anomaly_type": "母子资金分离异常"
+        }
+      ],
+      "output": {
+        "format": "逻辑异常清单",
+        "example": {"逻辑异常清单": ["存贷双高可疑", "利润含金量极低"]},
+        "note": "不下最终定论，最终判断交给D层"
+      }
+    },
+
+    {
+      "id": "layer_c",
+      "name": "C层：MAD偏差异常检测",
+      "emoji": "📏",
+      "task": "用A2提供的同行中位数做基准，计算这家公司的指标偏离同行平均水平多远",
+      "algorithm": {
+        "name": "MAD（中位数绝对偏差）",
+        "rationale": "财务数据常有极端暴雷值，MAD比标准差更稳健",
+        "formula": {
+          "mad": "MAD = median(|x_i - median(x)|)",
+          "deviation_multiple": "偏离度 = |实际值 - 同行中位数| / MAD"
+        }
+      },
+      "input": "A2层输出的横向基准（Top 20%同行中位数）",
+      "output": {
+        "format": "异常波动清单",
+        "example": {
+          "indicator": "存货周转率",
+          "actual_value": 0.1,
+          "deviation_description": "低于同行中位数3.2倍MAD"
+        }
+      }
+    },
+
+    {
+      "id": "layer_d",
+      "name": "D层：原因查找与概率分配",
+      "emoji": "🔎",
+      "task": "对于每一个异常，通过双路径推理分析原因，再综合分配概率",
+      "sub_layers": [
+        {
+          "id": "d1",
+          "name": "D1层：双路径推理",
+          "note": "两条路严格隔离，互不越界",
+          "paths": [
+            {
+              "id": "path_1",
+              "name": "路1（查原文）",
+              "method": "LLM只读年报的【附注】和【管理层讨论】原文，提取客观解释",
+              "edge_case": "如果原文含糊其辞，标记为'无直接解释'"
+            },
+            {
+              "id": "path_2",
+              "name": "路2（外部情报推演）",
+              "method": "LLM不看原文，而是拿A0层的宏观事实 + A1的硬标签 + 财务数字画像 + 偏差数据，发散出几种合理的互斥假设",
+              "inputs": ["A0宏观事实", "A1硬标签", "A1 FinancialProfile（6维等级）", "B+/C偏差数据"],
+              "example_hypotheses": [
+                "假设A：宏观原材料跌价导致备货",
+                "假设B：产品滞销"
+              ]
+            }
+          ],
+          "execution_order": [
+            "先用双路径分析B+层异常（基本只有两种可能：行业本身性质或造假）",
+            "再用双路径分析C层偏差"
+          ]
+        },
+        {
+          "id": "d2",
+          "name": "D2层：概率分配",
+          "task": "综合两路结果，对每种假设给出概率",
+          "rules": [
+            {
+              "scenario": "对于C层异常，路1有明确战略解释 + 路2无冲突",
+              "result": "70%策略调整，10%造假，20%其他"
+            },
+            {
+              "scenario": "对于B+层异常，路1无解释 + 路2指向行业本身性质",
+              "result": "100%行业本身性质"
+            }
+          ],
+          "output_format": {
+            "example": [
+              {
+                "anomaly_indicator": "存货周转率",
+                "attribution": {
+                  "经营滞销": "60%",
+                  "战略备货": "30%",
+                  "其他": "10%"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+
+    {
+      "id": "layer_e",
+      "name": "E层：最终输出打分与报告",
+      "emoji": "📋",
+      "sub_layers": [
+        {
+          "id": "e1",
+          "name": "E1层：综合置信度打分",
+          "scoring_system": {
+            "base_score": 100,
+            "deduction_mechanism": {
+              "name": "双层扣分",
+              "c_layer_deduction": {
+                "name": "C层扣分（偏离度扣分）",
+                "steps": [
+                  {
+                    "step": 1,
+                    "name": "内置权重库",
+                    "description": "系统内建权重库，按影响程度映射",
+                    "weight_mapping": {
+                      "极其严重（如财务造假）": -3,
+                      "有些严重（如经营恶化）": -1,
+                      "正向利好": 1
+                    }
+                  },
+                  {
+                    "step": 2,
+                    "name": "实际影响权重计算",
+                    "formula": "实际影响权重 = 基础影响权重 × (1 + MAD偏离度 / 3)",
+                    "rationale": "偏离越大，影响权重越高。偏离1.5倍MAD按基础-1计算，偏离6倍MAD则权重放大"
+                  },
+                  {
+                    "step": 3,
+                    "name": "期望影响计算",
+                    "formula": "期望影响 = Σ(归因概率 × 实际影响权重)",
+                    "scope": "对D层列出的每一条属于C的部分"
+                  },
+                  {
+                    "step": 4,
+                    "name": "C层扣分汇总",
+                    "formula": "C层扣分 = Σ(期望影响 × MAD偏离度)"
+                  }
+                ]
+              },
+              "bplus_layer_deduction": {
+                "name": "B+层扣分",
+                "weight_rules": {
+                  "行业性质": {"weight": 0, "rationale": "行业本身特性不扣分"},
+                  "造假": {"weight": -3, "rationale": "造假嫌疑重扣"}
+                },
+                "severity_correction": {
+                  "description": "用严重度评分修正",
+                  "formulas": {
+                    "deposit_loan_dual_high": {
+                      "name": "存贷双高严重度",
+                      "formula": "(货币资金/总资产 × 有息负债/总资产) 的乘积",
+                      "thresholds": [
+                        {"condition": "数值 > 0.3", "severity": 5},
+                        {"condition": "数值 0.1~0.3", "severity": "2~3"}
+                      ]
+                    },
+                    "cash_flow_ratio": {
+                      "name": "净现比/收现比严重度",
+                      "normal_threshold": 0.6,
+                      "formula": "(0.6 - 实际净现比) / 0.2 × 2",
+                      "example": "实际净现比=0.4时严重度=(0.6-0.4)/0.2×2=2分",
+                      "edge_case": "经营现金流为负时锁死最高分5分"
+                    },
+                    "fund_separation": {
+                      "name": "母子资金分离度严重度",
+                      "formula": "(合并报表货币资金 - 母公司货币资金) / 总资产",
+                      "thresholds": [
+                        {"condition": "比例 > 30%", "severity": 5},
+                        {"condition": "比例 > 15%", "severity": 3}
+                      ]
+                    }
+                  },
+                  "final_formula": "B+层扣分 = Σ(权重 × 修正系数)"
+                }
+              },
+              "final_score_formula": "最终得分 = 100 - (C层扣分 + B+层扣分)，最低0分"
+            }
+          }
+        },
+        {
+          "id": "e2",
+          "name": "E2层：生成结构化报告",
+          "output_modules": [
+            {
+              "module": 1,
+              "name": "整体研判",
+              "contents": [
+                "E1综合得分",
+                "相似企业横向对比（Top 5同行各财务指标一览）"
+              ]
+            },
+            {
+              "module": 2,
+              "name": "核心异常与概率归因",
+              "contents": [
+                "B+和C层的异常指标",
+                "D层算出的概率分布",
+                "判断依据（标出推理依据的年报页码或附注名称）"
+              ]
+            },
+            {
+              "module": 3,
+              "name": "多空逻辑栈",
+              "contents": [
+                "看多支持点",
+                "看空风险点"
+              ]
+            },
+            {
+              "module": 4,
+              "name": "横向对比表",
+              "contents": [
+                "目标公司与Top 5最相似同行的6维财务特征等级对比"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+
+  "example_repo_structure": {
+    "description": "当前项目完整仓库组织方式（v5.0）",
+    "root": {
+      "README.md": "项目首页与快速开始",
+      "pyproject.toml": "项目元信息与依赖管理（含akshare依赖）",
+      ".env.example": "API Key等敏感配置模板（含SERPAPI_KEY）",
+      ".gitignore": "Git忽略规则",
+      "config/": {
+        "description": "全局配置（不变的数据）",
+        "contents": {
+          "weights.yaml": "E层权重库：各指标的基础影响权重",
+          "industry_tags.yaml": "A层：同花顺硬标签体系 + 财务画像阈值（精简版，无软标签）",
+          "thresholds.yaml": "B+/C层异常判定阈值",
+          "financial_fields.yaml": "B0层字段映射表",
+          "prompts/": "8个LLM prompt模板（a0_search_query, a0_macro_facts, a1_tagging, b0_semantic_guide, d1_lookup_notes, d1_hypothesis, d2_probability, e2_report）"
+        }
+      },
+      "schemas/": {
+        "description": "跨层共享的数据契约（Pydantic v2）",
+        "contents": [
+          "raw_doc.py：第0层输出：JSON四大区块的定义",
+          "financial.py：统一财务字段体系（Revenue_Total等）",
+          "tags.py：硬标签 + FinancialProfile（6维财务画像）—— SoftTag已移除",
+          "b0_guide.py：B0层输出：表头映射指引",
+          "benchmark.py：A2层输出：同行基准数据",
+          "anomaly.py：B+异常清单 / C层MAD偏离度",
+          "reasoning.py：D层推理结果（Hypothesis/Explanation/ProbabilityAssignment）",
+          "enums.py：枚举常量",
+          "report.py：E层最终报告结构"
+        ]
+      },
+      "pipeline/": {
+        "description": "全流程编排",
+        "contents": [
+          "orchestrator.py：按顺序调度0→A→B→B+→C→D→E",
+          "context.py：各层之间的数据传递上下文（PipelineContext）",
+          "step_registry.py：层注册机制",
+          "monitor.py：运行监控"
+        ]
+      },
+      "layers/": {
+        "description": "六层实现",
+        "subdirectories": {
+          "layer_0_extract/": ["pdf_parser.py (TODO)", "chunker.py (TODO)", "merger.py (TODO)"],
+          "layer_a_benchmark/": [
+            "a0_macro_search.py (LLM: 两段式prompt+SerpAPI联网搜情报)",
+            "a1_tagging.py (LLM: CSV查硬标签 + 画6维数字画像)",
+            "a2_matcher.py (纯代码: 余弦相似度 + akshare缓存 + 双池输出)"
+          ],
+          "layer_b_extract/": [
+            "b0_semantic_guide.py (LLM: 读表头做字段映射)",
+            "b1_extractors.py (纯代码: 定位表格取数+单位换算)",
+            "b1_validators.py (纯代码: 勾稽关系校验)"
+          ],
+          "layer_bplus_internal/": [
+            "logic_checks.py (纯代码: 净现比/存贷双高/母子分离)",
+            "fraud_patterns.py"
+          ],
+          "layer_c_deviation/": ["mad_calculator.py (纯代码)", "deviation_scorer.py (纯代码)"],
+          "layer_d_reasoning/": [
+            "d1_dual_path.py (编排: 遍历异常调路1+路2)",
+            "d1_lookup_notes.py (LLM: 查年报附注/管理层讨论)",
+            "d1_hypothesis.py (LLM: 宏观情报+财务画像推演假设)",
+            "d2_probability.py (LLM: 综合分配概率)"
+          ],
+          "layer_e_output/": [
+            "e1_scoring.py (纯代码: 置信度打分)",
+            "e2_report_gen.py (LLM+模板: 生成结构化报告)"
+          ]
+        }
+      },
+      "llm/": {
+        "description": "LLM调用封装（统一网关）",
+        "contents": [
+          "client.py：统一LLM调用接口（Anthropic主 + OpenAI备，指数退避重试）",
+          "prompt_loader.py：从config/prompts/加载Jinja2模板",
+          "response_parser.py：解析LLM输出为结构化数据",
+          "cache.py：LLM响应缓存"
+        ]
+      },
+      "data/": {
+        "description": "数据（git-ignored或DVC管理）",
+        "subdirectories": [
+          "raw/ (原始PDF)",
+          "processed/ (第0层输出的JSON)",
+          "industry/ (同花顺行业分类CSV: 5536只A股三级行业)",
+          "outputs/ (最终报告)"
+        ],
+        "note": "benchmarks/目录已移除，同行财务数据改为akshare实时获取+内存缓存"
+      },
+      "tests/": {
+        "description": "测试（26个全部通过）",
+        "subdirectories": [
+          "test_layers/ (A2/B1/C/E1)",
+          "test_llm/ (PromptLoader/ResponseParser)",
+          "test_pipeline/ (orchestrator/full_pipeline)",
+          "fixtures/ (mock_benchmarks.csv, sample_financials.json, sample_raw_doc.json)"
+        ]
+      },
+      "notebooks/": "探索性分析（prototype_deviation.ipynb等）",
+      "scripts/": {
+        "description": "运维/工具脚本",
+        "contents": [
+          "run_pipeline.py：命令行入口",
+          "build_benchmark_db.py：初始化行业基准数据库（akshare）",
+          "batch_analyze.py：批量分析",
+          "show_report.py：查看报告",
+          "validate_pdf.py：快速验证PDF可解析性"
+        ]
+      },
+      "doc/": {
+        "description": "文档",
+        "contents": [
+          "architecture-v5.0.md：架构文档",
+          "architecture-v5.0.json：架构文档（JSON详细版）",
+          "teammate-tasks.json：队友任务分配（A层已由负责人实现）"
+        ]
+      }
+    }
+  },
+
+  "critical_branching_and_edge_cases": [
+    {
+      "location": "A1层 → 硬标签",
+      "condition": "CSV查不到硬标签",
+      "action": "LLM降级同时输出硬标签+等级画像；LLM不可用则关键词规则降级"
+    },
+    {
+      "location": "A2层 → 同行匹配",
+      "condition": "同行数 < 5",
+      "action": "返回空基准，跳过MAD匹配"
+    },
+    {
+      "location": "A2层 → MAD池",
+      "condition": "同行数 < 10",
+      "action": "Top 5池与MAD池合并（不分两层）"
+    },
+    {
+      "location": "A2层 → 财务数据",
+      "condition": "akshare获取失败",
+      "action": "日志警告，返回空基准"
+    },
+    {
+      "location": "B1层 → E层",
+      "condition": "勾稽校验失败",
+      "trigger": "B1层发现资产≠负债+权益等会计恒等式不成立",
+      "action": "直接阻断，跳过B+、C、D层，在E层输出异常阻断报告",
+      "output": "【系统异常阻断：PDF数据源损坏或低劣造假，请人工核验原文件】"
+    },
+    {
+      "location": "B+层存贷双高",
+      "condition_resolution": "D层识别为行业本身性质",
+      "example": "房地产行业以及多子公司结构的企业，存贷双高属于行业本身特性",
+      "consequence": "B+层扣分权重为0（不扣分）"
+    },
+    {
+      "location": "D1路1查原文",
+      "condition": "原文含糊其辞或找不到直接相关解释",
+      "action": "标记为'无直接解释'，概率分配时以路2推演假设为主"
+    },
+    {
+      "location": "E1净现比严重度",
+      "condition": "经营现金流为负数（净现比 < 0）",
+      "action": "严重度直接锁死最高分5分"
+    }
+  ],
+
+  "data_dependencies_across_layers": {
+    "layer_0_output_used_by": ["A层（文字部分）", "B层（表格部分）", "D1路1（附注和管理层讨论原文）"],
+    "layer_a0_output_used_by": ["D1路2（宏观事实）"],
+    "layer_a1_output_used_by": ["A2层（financial_profile做向量匹配）", "D1路2（硬标签+财务画像）"],
+    "layer_a2_output_used_by": ["C层（Top 20%同行中位数）", "E2层（Top 5同行对比展示）"],
+    "layer_b0_output_used_by": ["B1层（字段映射和坐标指引）"],
+    "layer_b1_output_used_by": ["B+层（财务数据）", "C层（财务数据）"],
+    "layer_bplus_output_used_by": ["D层（逻辑异常分析）", "E层（B+扣分）"],
+    "layer_c_output_used_by": ["D层（偏离数据）", "E层（C扣分）"],
+    "layer_d_output_used_by": ["E层（概率归因）"]
+  },
+
+  "separation_boundaries": {
+    "llm_touches": [
+      "A0：生成搜索词（a0_search_query）+ 从搜索结果中提取宏观事实（a0_macro_facts）",
+      "A1：读取文字部分输出硬标签 + 6维财务等级画像",
+      "B0：读取表头做字段映射",
+      "D1路1：从附注和管理层讨论中提取异常解释",
+      "D1路2：基于宏观事实+财务画像推演假设",
+      "D2：综合双路径结果分配概率",
+      "E2：生成报告中的多空逻辑栈文本"
+    ],
+    "code_touches": [
+      "第0层：PDF解析和切分",
+      "A0：调用SerpAPI联网搜索（中间层）",
+      "A1：CSV查表获取硬标签（优先路径）",
+      "A2：akshare获取同行财务数据 + 余弦相似度匹配 + 双池输出",
+      "B1：精确定位表格、取数、单位换算、勾稽校验",
+      "B+：三项逻辑硬伤检查（净现比/存贷双高/母子分离）",
+      "C：MAD偏差计算",
+      "E1：置信度打分公式计算"
+    ]
+  }
+}

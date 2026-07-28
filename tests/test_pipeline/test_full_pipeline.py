@@ -18,7 +18,7 @@
 
 import pytest
 from pipeline.context import PipelineContext
-from schemas.tags import HardTag, SoftTag, CompanyTags
+from schemas.tags import HardTag, FinancialProfile, CompanyTags
 from schemas.benchmark import IndustryProfile, Benchmark, PeerCompany
 from schemas.financial import FinancialStatement, FinancialField, ValidationResult, ValidationCheck
 from schemas.anomaly import DeviationAnomaly, LogicAnomaly
@@ -37,15 +37,12 @@ def _make_full_context() -> PipelineContext:
         company_name="贵州茅台",
         stock_code="600519",
         hard_tags=[
-            HardTag(system="同花顺行业", value="食品饮料"),
-            HardTag(system="申万行业", value="白酒III"),
+            HardTag(system="同花顺三级行业", value="白酒"),
+            HardTag(system="同花顺二级行业", value="饮料制造"),
         ],
-        soft_tags=[
-            SoftTag(dimension="资产结构", value="轻资产"),
-            SoftTag(dimension="商业模式", value="品牌驱动"),
-            SoftTag(dimension="客户类型", value="To-C"),
-            SoftTag(dimension="毛利率特征", value="高毛利"),
-        ],
+        financial_profile=FinancialProfile(
+            levels=["极高", "极高", "低", "低", "低", "高"],
+        ),
     )
     ctx.macro_facts = [
         "2024年白酒行业产量同比下降2.5%",
@@ -53,7 +50,7 @@ def _make_full_context() -> PipelineContext:
         "居民消费升级趋势持续，高端白酒需求韧性较强",
     ]
     ctx.benchmark = Benchmark(
-        industry=IndustryProfile(industry_name="白酒", soft_tag_summary="品牌驱动、高毛利、To-C"),
+        industry=IndustryProfile(industry_name="白酒"),
         peer_median={"存货周转率": 0.8, "毛利率": 0.75, "净利率": 0.30, "资产负债率": 0.35, "营业收入增长率": 0.15},
         historical_mean={"存货周转率": 0.75, "毛利率": 0.76, "净利率": 0.28, "资产负债率": 0.30, "营业收入增长率": 0.18},
         peer_companies=[

@@ -67,14 +67,20 @@ def run_matching(tags: CompanyTags) -> Benchmark:
     """匹配相似企业并计算基准
 
     Args:
-        tags: A1 层输出的 CompanyTags（含 financial_profile）
+        tags: A1 层输出的 CompanyTags
+              （含 hard_tags；financial_profile 由本函数从 akshare 计算）
 
     Returns:
         Benchmark（同行列表 + 横向中位数）
     """
+    # 从 akshare 实际数据计算目标公司的财务画像
     if not tags.financial_profile:
-        logger.warning("目标公司无财务数字画像，返回空基准")
-        return _empty_benchmark(tags)
+        target_profile = _compute_target_profile(tags.stock_code, tags.company_name)
+        if target_profile:
+            tags.financial_profile = target_profile
+        else:
+            logger.warning("目标公司无财务数字画像，返回空基准")
+            return _empty_benchmark(tags)
 
     target_vec = tags.financial_profile.as_numeric
 
@@ -409,6 +415,28 @@ def _cosine_rank(target_vec: list[float], peers: list[dict]) -> list[dict]:
             _cosine_similarity(target_vec, p["numeric_vector"]), 4
         )
     return sorted(peers, key=lambda p: -p["similarity_score"])
+
+
+def _compute_target_profile(stock_code: str, company_name: str) -> Optional[FinancialProfile]:
+    """从 akshare 实际财务数据计算目标公司的 6 维等级画像
+
+    复用同行计算逻辑：
+    - _fetch_financial_data() → 5 年原始财务数据
+    - _compute_level_array() → 每年 6 维等级
+    - _merge_levels_by_median() → 逐维中位数合并
+    """
+    if not stock_code:
+        logger.warning(f"目标公司 {company_name} 无股票代码")
+        return None
+
+    year_data = _fetch_financial_data(stock_code)
+    if not year_data:
+        logger.warning(f"akshare 未获取到 {company_name}({stock_code}) 的财务数据")
+        return None
+
+    level_arrays = [_compute_level_array(yr) for yr in year_data]
+    merged = _merge_levels_by_median(level_arrays)
+    return FinancialProfile(levels=merged)
 
 
 # ────────────────────────────────────────────

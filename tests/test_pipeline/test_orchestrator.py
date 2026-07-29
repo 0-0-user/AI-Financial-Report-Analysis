@@ -18,18 +18,11 @@ class TestOrchestrator:
     """编排器测试"""
 
     def test_step_registration(self):
-        """所有步骤应已注册（先导入各层触发 @registry.register）"""
-        # 显式导入各层，触发 @registry.register 装饰器
-        import layers.layer_0_extract  # noqa: F401
-        import layers.layer_a_benchmark  # noqa: F401
-        import layers.layer_b_extract  # noqa: F401
-        import layers.layer_bplus_internal  # noqa: F401
-        import layers.layer_c_deviation  # noqa: F401
-        import layers.layer_d_reasoning  # noqa: F401
-        import layers.layer_e_output  # noqa: F401
+        """所有步骤应已注册（通过 layers 包自动导入触发）"""
+        import layers  # noqa: F401 — 触发 __init__.py 中的自动导入
 
         steps = registry.list_steps()
-        expected = ["layer_0", "layer_a", "layer_b", "layer_bplus", "layer_c", "layer_d", "layer_e"]
+        expected = ["layer_0", "layer_a", "layer_b", "layer_amacro", "layer_bplus", "layer_c", "layer_d", "layer_e"]
         for step in expected:
             assert step in steps, f"步骤 {step} 未注册"
 

@@ -124,8 +124,8 @@ def run_tagging(raw_doc: RawDocument) -> CompanyTags:
         2. CSV 查不到 → 返回空硬标签（不降级）
         3. 财务数字画像由 A2 层从 akshare 实际数据计算
     """
-    company_name = raw_doc.metadata.get("company_name", "")
-    stock_code = raw_doc.metadata.get("stock_code", "")
+    company_name = raw_doc.company_overview.company_name or ""
+    stock_code = raw_doc.company_overview.stock_code or ""
 
     # CSV 查硬标签
     csv_hard_tags = _csv_lookup_hard_tags(stock_code, company_name)

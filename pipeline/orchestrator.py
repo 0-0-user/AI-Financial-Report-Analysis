@@ -15,8 +15,13 @@
     report = orch.run("年报.pdf")
 """
 
+import logging
+
 from pipeline.context import PipelineContext
 from pipeline.step_registry import registry
+
+# 导入各层触发 @registry.register 注册（必须在首次使用 registry 之前）
+import layers  # noqa: F401
 
 from schemas.report import Report, OverallAssessment, ScoreBreakdown, PeerComparison
 
@@ -70,6 +75,8 @@ class Orchestrator:
                 break
 
         if ctx.errors:
+            for err in ctx.errors:
+                logger.error(err)
             return self._build_error_report(ctx)
 
         return ctx.report

@@ -56,12 +56,8 @@ def run_macro_search(ctx: PipelineContext) -> list[str]:
         logger.warning("A0: 未生成任何搜索词")
         return []
 
-    # 步骤2：执行搜索 + 提取事实
+    # 步骤2：执行搜索 + 提取事实（无 SerpAPI Key 时 LLM 知识兜底）
     all_search_results = _execute_searches(search_queries)
-
-    if not all_search_results:
-        logger.warning("A0: SerpAPI 搜索无结果")
-        return []
 
     # 步骤3：LLM 提取事实
     facts = _extract_facts(
@@ -135,31 +131,28 @@ def _fallback_search_queries(business_desc: str, industry_tags: str) -> list[str
 # ────────────────────────────────────────
 
 def _execute_searches(queries: list[str]) -> str:
-    """批量执行 SerpAPI 搜索，合并结果
-
-    每维度取前 3 条搜索词，每条搜索取前 3 条结果。
-    """
+    """批量执行 SerpAPI 搜索，合并结果（无 Key 时走 LLM 知识兜底）"""
     if not SERPAPI_KEY:
-        logger.warning("SERPAPI_KEY 未设置，跳过联网搜索。请在 .env 中配置")
-        return ""
+        logger.info("SERPAPI_KEY 未设置，将使用 LLM 行业知识生成宏观事实")
+        return "（无联网搜索结果，请基于自身行业知识按四个维度输出宏观事实）"
 
     try:
         import urllib.request
         import urllib.parse
     except ImportError:
-        logger.warning("urllib 不可用，跳过搜索")
-        return ""
+        logger.warning("urllib 不可用，使用 LLM 知识兜底")
+        return "（无联网搜索结果，请基于自身行业知识按四个维度输出宏观事实）"
 
     all_snippets = []
 
-    for query in queries[:12]:  # 最多 12 条搜索词（4维度 × 3词）
+    for query in queries[:12]:
         try:
             params = urllib.parse.urlencode({
                 "q": query,
                 "api_key": SERPAPI_KEY,
                 "engine": "google",
-                "num": 3,      # 每条搜索取 3 条结果
-                "hl": "zh-cn",  # 中文优先
+                "num": 3,
+                "hl": "zh-cn",
             })
             url = f"{SERPAPI_URL}?{params}"
 
@@ -179,9 +172,9 @@ def _execute_searches(queries: list[str]) -> str:
             continue
 
     if not all_snippets:
-        return ""
+        return "（无联网搜索结果，请基于自身行业知识按四个维度输出宏观事实）"
 
-    # 合并为文本（token 优化：截断总长）
+    # 合并为文本
     combined = "\n\n---\n\n".join(all_snippets)
     if len(combined) > 8000:
         combined = combined[:8000] + "\n...(搜索结果过长，已截断)"

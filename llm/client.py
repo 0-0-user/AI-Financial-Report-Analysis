@@ -7,14 +7,20 @@
 都必须通过这里的 LLMClient，而不是直接 new 各厂商的 SDK。
 
 这样做的好处：
-- 切换厂商：改 provider 参数即可，不需要改每层代码
+- 切换厂商：改环境变量 LLM_PROVIDER 即可，不需要改每层代码
 - 统一重试：网络错误 / 限流 / 超时，这里统一处理
 - 统一解析：自动处理 JSON fence、单引号等格式问题
 - 结构化输出：传入 Pydantic schema 即可自动校验
 
-厂商支持：
-- Anthropic（主力）：Claude Sonnet / Opus
-- OpenAI（备用）：GPT-4o / GPT-4-turbo
+厂商支持（通过环境变量 LLM_PROVIDER 切换）：
+- anthropic — Claude Sonnet / Opus（默认）
+- openai   — GPT-4o / GPT-4o-mini
+- deepseek — DeepSeek-V3 / DeepSeek-R1
+- qwen     — 通义千问 Qwen-Plus / Qwen-Max
+- glm      — 智谱 GLM-4-Plus
+- moonshot — Moonshot / Kimi
+- gemini   — Google Gemini 2.0 Flash
+- doubao   — 字节豆包 Pro-32K
 
 使用方式：
     client = LLMClient(provider="anthropic")
@@ -22,6 +28,10 @@
     result = client.chat("a1_tagging", {"company": "茅台"})
     # 结构化输出（自动校验）
     result = client.chat("b0_semantic_guide", {...}, response_schema=B0Guide)
+
+环境变量配置（二选一即可）：
+    方案 A — Anthropic：ANTHROPIC_API_KEY=xxx
+    方案 B — OpenAI 兼容：LLM_PROVIDER=deepseek 且 DEEPSEEK_API_KEY=xxx
 """
 
 import os
@@ -37,34 +47,93 @@ from llm.response_parser import ResponseParser
 logger = logging.getLogger(__name__)
 
 
+# ──────────────────────────────────────────────
+# 厂商配置表
+# ──────────────────────────────────────────────
+# adapter="anthropic" → 用 anthropic SDK
+# adapter="openai"    → 用 openai SDK（兼容绝大多数厂商）
+# env_key: 从哪个环境变量读取 API Key
+
+PROVIDER_CONFIG: dict[str, dict] = {
+    "anthropic": {
+        "adapter": "anthropic",
+        "env_key": "ANTHROPIC_API_KEY",
+        "default_model": "claude-sonnet-5-20250610",
+    },
+    "openai": {
+        "adapter": "openai",
+        "env_key": "OPENAI_API_KEY",
+        "base_url": None,
+        "default_model": "gpt-4o-2025-06-01",
+    },
+    "deepseek": {
+        "adapter": "openai",
+        "env_key": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com",
+        "default_model": "deepseek-chat",
+    },
+    "qwen": {
+        "adapter": "openai",
+        "env_key": "QWEN_API_KEY",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "default_model": "qwen-plus",
+    },
+    "glm": {
+        "adapter": "openai",
+        "env_key": "GLM_API_KEY",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+        "default_model": "glm-4-plus",
+    },
+    "moonshot": {
+        "adapter": "openai",
+        "env_key": "MOONSHOT_API_KEY",
+        "base_url": "https://api.moonshot.cn/v1",
+        "default_model": "moonshot-v1-8k",
+    },
+    "gemini": {
+        "adapter": "openai",
+        "env_key": "GEMINI_API_KEY",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "default_model": "gemini-2.0-flash",
+    },
+    "doubao": {
+        "adapter": "openai",
+        "env_key": "DOUBAO_API_KEY",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "default_model": "doubao-pro-32k",
+    },
+}
+
+
 class LLMClient:
     """统一的 LLM 客户端，屏蔽多厂商差异"""
 
-    # 各厂商的默认模型映射
-    DEFAULT_MODELS = {
-        "anthropic": "claude-sonnet-5-20250610",
-        "openai": "gpt-4o-2025-06-01",
-    }
-
     def __init__(
         self,
-        provider: str = "anthropic",
+        provider: str = "",
         model: Optional[str] = None,
         max_retries: int = 3,
         timeout_seconds: int = 120,
     ):
         """
         Args:
-            provider: "anthropic" | "openai"
+            provider: 厂商名（见 PROVIDER_CONFIG），空字符从 LLM_PROVIDER 读取
             model: 模型名称，不传则使用各厂商默认模型
             max_retries: API 调用失败时的最大重试次数
             timeout_seconds: 单次 API 调用的超时时间
         """
-        if provider not in self.DEFAULT_MODELS:
-            raise ValueError(f"不支持的 LLM 厂商: {provider}，可选: {list(self.DEFAULT_MODELS.keys())}")
+        if not provider:
+            provider = os.getenv("LLM_PROVIDER", "anthropic")
+
+        config = PROVIDER_CONFIG.get(provider)
+        if not config:
+            raise ValueError(
+                f"不支持的 LLM 厂商: {provider}，可选: {list(PROVIDER_CONFIG.keys())}"
+            )
 
         self.provider = provider
-        self.model = model or self.DEFAULT_MODELS[provider]
+        self.config = config
+        self.model = model or config["default_model"]
         self.max_retries = max_retries
         self.timeout_seconds = timeout_seconds
 
@@ -77,22 +146,26 @@ class LLMClient:
     # ──────────────────────────────────────────────
 
     def _init_client(self):
-        """根据 provider 初始化对应的 SDK 客户端
-
-        API Key 读取优先级: 环境变量 > .env 文件
-        """
-        if self.provider == "anthropic":
+        """根据 provider 配置初始化对应的 SDK 客户端"""
+        adapter = self.config["adapter"]
+        if adapter == "anthropic":
             return self._init_anthropic()
-        elif self.provider == "openai":
+        elif adapter == "openai":
             return self._init_openai()
         return None
 
+    def _read_api_key(self) -> str:
+        """从环境变量读取 API Key"""
+        env_key = self.config["env_key"]
+        api_key = os.getenv(env_key, "")
+        if not api_key:
+            logger.warning("%s 未设置，使用占位 key（API 调用会失败）", env_key)
+            api_key = "sk-placeholder"
+        return api_key
+
     def _init_anthropic(self):
         """初始化 Anthropic SDK"""
-        api_key = os.getenv("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            logger.warning("ANTHROPIC_API_KEY 未设置，使用占位 key（API 调用会失败）")
-            api_key = "sk-ant-placeholder"
+        api_key = self._read_api_key()
         try:
             import anthropic
             return anthropic.Anthropic(
@@ -105,15 +178,14 @@ class LLMClient:
             return None
 
     def _init_openai(self):
-        """初始化 OpenAI SDK"""
-        api_key = os.getenv("OPENAI_API_KEY", "")
-        if not api_key:
-            logger.warning("OPENAI_API_KEY 未设置，使用占位 key（API 调用会失败）")
-            api_key = "sk-placeholder"
+        """初始化 OpenAI 兼容 SDK（DeepSeek / Qwen / GLM / Moonshot 等）"""
+        api_key = self._read_api_key()
+        base_url = self.config.get("base_url")
         try:
             from openai import OpenAI
             return OpenAI(
                 api_key=api_key,
+                base_url=base_url,
                 max_retries=self.max_retries,
                 timeout=self.timeout_seconds,
             )
@@ -201,12 +273,13 @@ class LLMClient:
         if self._client is None:
             raise RuntimeError(f"LLM 客户端未初始化（{self.provider} SDK 可能未安装）")
 
-        if self.provider == "anthropic":
+        adapter = self.config["adapter"]
+        if adapter == "anthropic":
             return self._call_anthropic(messages)
-        elif self.provider == "openai":
+        elif adapter == "openai":
             return self._call_openai(messages)
         else:
-            raise RuntimeError(f"不支持的 LLM 厂商: {self.provider}")
+            raise RuntimeError(f"不支持的 adapter: {adapter}")
 
     # ──────────────────────────────────────────────
     # 各厂商具体的 API 调用
@@ -245,7 +318,7 @@ class LLMClient:
         return str(content_blocks)
 
     def _call_openai(self, messages: list[dict]) -> str:
-        """调用 OpenAI Chat Completion API"""
+        """调用 OpenAI 兼容 Chat Completion API（GPT / DeepSeek / Qwen / GLM ...）"""
         kwargs = {
             "model": self.model,
             "messages": messages,
@@ -287,11 +360,15 @@ class LLMClient:
         """
         prices = {
             "anthropic": {
-                "claude-sonnet-5-20250610": (3.0, 15.0),   # 每百万 token: 输入, 输出
+                "claude-sonnet-5-20250610": (3.0, 15.0),
                 "claude-opus-5-20250610": (15.0, 75.0),
             },
             "openai": {
                 "gpt-4o-2025-06-01": (2.5, 10.0),
+                "gpt-4o-mini": (0.15, 0.6),
+            },
+            "deepseek": {
+                "deepseek-chat": (0.27, 1.10),
             },
         }
 
@@ -304,4 +381,4 @@ class LLMClient:
         return round(cost, 6)
 
     def __repr__(self) -> str:
-        return f"LLMClient(provider={self.provider!r}, model={self.model!r})"
+        return f"LLMClient(provider={self.provider!r}, model={self.model!r}, adapter={self.config['adapter']!r})"

@@ -49,15 +49,11 @@ def run_macro_search(ctx: PipelineContext) -> list[str]:
     business_desc = ctx.raw_doc.company_overview.business_description or ""
     industry_tags = _format_industry_tags(ctx)
     year = str(ctx.raw_doc.metadata.report_year or ctx.financials.year if ctx.financials else 2024)
-    key_raw_materials = _extract_materials(ctx)
-    downstream_markets = _extract_downstream(ctx)
 
     # 步骤1：生成搜索词
     search_queries = _generate_search_queries(
         business_desc=business_desc,
         industry_tags=industry_tags,
-        key_raw_materials=key_raw_materials,
-        downstream_markets=downstream_markets,
         year=year,
     )
 
@@ -76,8 +72,6 @@ def run_macro_search(ctx: PipelineContext) -> list[str]:
     facts = _extract_facts(
         business_desc=business_desc,
         industry_tags=industry_tags,
-        key_raw_materials=key_raw_materials,
-        downstream_markets=downstream_markets,
         year=year,
         search_results=all_search_results,
     )
@@ -93,8 +87,6 @@ def run_macro_search(ctx: PipelineContext) -> list[str]:
 def _generate_search_queries(
     business_desc: str,
     industry_tags: str,
-    key_raw_materials: str,
-    downstream_markets: str,
     year: str,
 ) -> list[str]:
     """调用 LLM 生成 4 维度搜索关键词"""
@@ -107,8 +99,6 @@ def _generate_search_queries(
             {
                 "business_desc": business_desc,
                 "industry_tags": industry_tags,
-                "key_raw_materials": key_raw_materials,
-                "downstream_markets": downstream_markets,
                 "year": year,
             },
         )
@@ -210,8 +200,6 @@ def _execute_searches(queries: list[str]) -> str:
 def _extract_facts(
     business_desc: str,
     industry_tags: str,
-    key_raw_materials: str,
-    downstream_markets: str,
     year: str,
     search_results: str,
 ) -> list[str]:
@@ -225,8 +213,6 @@ def _extract_facts(
             {
                 "business_desc": business_desc,
                 "industry_tags": industry_tags,
-                "key_raw_materials": key_raw_materials,
-                "downstream_markets": downstream_markets,
                 "year": year,
                 "search_results": search_results,
             },
@@ -269,64 +255,15 @@ def _format_industry_tags(ctx: PipelineContext) -> str:
         parts.append("硬标签: " + "; ".join(
             f"{h.system}={h.value}" for h in tags.hard_tags
         ))
-    if tags.financial_profile and tags.financial_profile.levels:
+    if tags.financial_profile and tags.financial_profile.values:
         from schemas.tags import FINANCIAL_DIMENSIONS
         profile_items = [
-            f"{FINANCIAL_DIMENSIONS[i]}={lv}"
-            for i, lv in enumerate(tags.financial_profile.levels)
+            f"{FINANCIAL_DIMENSIONS[i]}={tags.financial_profile.values[i]:.2f}"
+            for i in range(len(tags.financial_profile.values))
+            if i < len(FINANCIAL_DIMENSIONS)
         ]
         parts.append("财务画像: " + " | ".join(profile_items))
     return "\n".join(parts)
-
-
-def _extract_materials(ctx: PipelineContext) -> str:
-    """从 B 层财务数据中尝试推断核心原材料
-
-    策略：查看营业成本（Cost_Revenue）的构成，
-    从行业标签推断典型原材料。
-    实际上原材料信息更多来自行业知识，这里做基础推断。
-    """
-    # 从行业标签推断
-    if ctx.tags:
-        for ht in ctx.tags.hard_tags:
-            industry = ht.value
-            material_map = {
-                "白酒": "高粱、小麦、包装材料",
-                "光伏制造设备": "硅料、银浆、光伏玻璃",
-                "锂电池": "碳酸锂、钴、镍、石墨",
-                "新能源汽车": "电池、芯片、钢材",
-                "半导体制造": "硅片、光刻胶、电子特气",
-                "化学制药": "原料药、中间体",
-                "房地产开发": "土地、建材、钢材",
-                "啤酒": "大麦、啤酒花、玻璃瓶",
-                "生猪养殖": "玉米、豆粕、饲料",
-                "空调": "铜、铝、压缩机",
-            }
-            if industry in material_map:
-                return material_map[industry]
-
-    return "请根据公司业务描述推断"
-
-
-def _extract_downstream(ctx: PipelineContext) -> str:
-    """推断下游领域"""
-    # 从公司概要和标签推断
-    desc = ctx.raw_doc.company_overview.business_description if ctx.raw_doc else ""
-    if ctx.tags and ctx.tags.financial_profile:
-        # v5.0: 从财务数字画像推断下游（高销售费用率 ≈ To-C，低≈To-B）
-        fp = ctx.tags.financial_profile
-        try:
-            sales_idx = 5  # 销售费用率是第6维
-            sales_level = fp.levels[sales_idx] if len(fp.levels) > sales_idx else ""
-            if sales_level in ("极高", "高"):
-                return f"终端消费者（{desc[:50]}）"
-            elif sales_level in ("中高", "中等"):
-                return f"混合客户（{desc[:50]}）"
-            else:
-                return f"企业/政府客户（{desc[:50]}）"
-        except (IndexError, AttributeError):
-            pass
-    return f"请根据公司业务描述推断（{desc[:80]}）"
 
 
 # ────────────────────────────────────────

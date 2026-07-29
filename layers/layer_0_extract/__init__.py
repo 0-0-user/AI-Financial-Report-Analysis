@@ -3,6 +3,9 @@
 from pipeline.step_registry import registry
 from pipeline.context import PipelineContext
 from schemas.raw_doc import RawDocument
+from .pdf_parser import PDFParser
+from .chunker import DocumentChunker
+from .merger import TableMerger
 
 
 @registry.register("layer_0")

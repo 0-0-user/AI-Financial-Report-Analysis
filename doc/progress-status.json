@@ -1,0 +1,200 @@
+{
+  "project": "AI-Financial-Report-Analysis",
+  "version": "5.0",
+  "date": "2026-07-28",
+  "python": "3.14",
+
+  "architecture_overview": {
+    "description": "6层流水线：PDF解析 → 行业基准 → 财务提取 → 逻辑校验 → 偏差检测 → 推理评分 → 报告输出",
+    "core_principles": [
+      "LLM 只做语义理解，不参与数学计算",
+      "代码只做数学运算，不进行语义理解",
+      "硬标签查表优先（CSV），不依赖 LLM",
+      "同行匹配用向量余弦相似度而非文本"
+    ]
+  },
+
+  "layer_status": {
+    "layer_0_pdf_extract": {
+      "status": "✅ 代码已实现",
+      "parser": "pdfplumber（唯一后端，无 MinerU/OCR）",
+      "submodules": {
+        "pdf_parser.py": "✅ 完成，pdfplumber 逐页提取 text + tables",
+        "chunker.py": "✅ 完成，规则切分四大区块（财务/管理层讨论/附注/公司概况）",
+        "merger.py": "✅ 完成，跨页表格合并 + 去重 + 清洗",
+        "__init__.py": "✅ 完成，注册 layer_0 步骤，编排 parser→chunker→merger"
+      },
+      "remaining": "需实际拿年报 PDF 跑通，调优 chunker 章节匹配规则"
+    },
+    "layer_a_benchmark": {
+      "status": "✅ 全部完成（项目负责人实现）",
+      "submodules": {
+        "a0_macro_search.py": "✅ LLM生成搜索词 + SerpAPI搜索 + LLM提取宏观事实，供 D1路2 使用",
+        "a1_tagging.py": "✅ 纯代码 CSV 查硬标签（同花顺三级/二级/一级），无 LLM，CSV 查不到返回空",
+        "a2_matcher.py": "✅ akshare 取数据算 6 维财务画像 + 余弦相似度匹配同行 + 双池输出（Top5 + Top20%）"
+      }
+    },
+    "layer_b_financial_extract": {
+      "status": "⚠️ 部分实现，待实际对接",
+      "submodules": {
+        "b0_semantic_guide.py": "✅ 完成，LLM 识别报表表头、字段映射、单位提取",
+        "b1_extractors.py": "✅ 完成，Pandas 定位表格取数、单位换算",
+        "b1_validators.py": "✅ 完成，资产负债表恒等式勾稽校验"
+      },
+      "remaining": "需对接实际 pdfplumber 输出的 financial_data 验证提取准确率"
+    },
+    "layer_bplus_logic_checks": {
+      "status": "✅ 代码已实现（未对接测试）",
+      "submodules": {
+        "logic_checks.py": "✅ 净现比/收现比、存贷双高、母子资金分离度",
+        "fraud_patterns.py": "✅ 异常模式检测"
+      },
+      "remaining": "需对接 B1 层财务数据验证"
+    },
+    "layer_c_deviation": {
+      "status": "✅ 代码已实现，有单元测试",
+      "submodules": {
+        "mad_calculator.py": "✅ MAD 中位数绝对偏差计算",
+        "deviation_scorer.py": "✅ 偏离度评分"
+      },
+      "tests": "✅ test_c_mad.py 3 tests passed"
+    },
+    "layer_d_reasoning": {
+      "status": "⚠️ 代码骨架已完成，属 teammate 任务",
+      "submodules": {
+        "d1_dual_path.py": "✅ 编排逻辑：遍历异常调路1+路2",
+        "d1_lookup_notes.py": "✅ 路1：LLM 查年报原文解释",
+        "d1_hypothesis.py": "✅ 路2：LLM 基于宏观事实 + 财务画像推演假设",
+        "d2_probability.py": "✅ 综合双路径结果分配概率（有兜底实现）"
+      },
+      "remaining": "需实际跑通 LLM 调用链路"
+    },
+    "layer_e_output": {
+      "status": "✅ 代码已实现，有单元测试",
+      "submodules": {
+        "e1_scoring.py": "✅ 双层扣分（C层偏离 + B+层逻辑），amplification_cap",
+        "e2_report_gen.py": "✅ 结构化报告生成（整体研判/核心异常/多空逻辑栈/横向对比）"
+      },
+      "tests": "✅ test_e1_scoring.py 4 tests passed"
+    }
+  },
+
+  "infrastructure": {
+    "llm_gateway": {
+      "status": "✅ 完成",
+      "providers": ["Anthropic（主）", "OpenAI（备）"],
+      "retry": "指数退避自动重试",
+      "prompt_templates": "YAML + Jinja2，位于 config/prompts/"
+    },
+    "pipeline_engine": {
+      "status": "✅ 完成",
+      "orchestrator": "按顺序调度 layer_0 → layer_a → layer_b → layer_bplus → layer_c → layer_d → layer_e",
+      "step_registry": "装饰器注册模式"
+    },
+    "schemas": {
+      "status": "✅ 10 个 Pydantic v2 模型全部完成",
+      "files": [
+        "raw_doc.py（PDF解析输出）",
+        "tags.py（硬标签 + FinancialProfile 6维画像）",
+        "financial.py（统一财务字段体系）",
+        "b0_guide.py（表头映射指引）",
+        "benchmark.py（同行基准）",
+        "anomaly.py（异常结构）",
+        "reasoning.py（推理结果）",
+        "report.py（最终报告）",
+        "enums.py（枚举常量）"
+      ]
+    }
+  },
+
+  "prompts": {
+    "count": 7,
+    "files": {
+      "a0_search_query": "A0: LLM 生成 4 维度联网搜索词",
+      "a0_macro_facts": "A0: 从搜索结果提取宏观事实",
+      "b0_semantic_guide": "B0: 识别报表表头/字段映射/单位提取",
+      "d1_lookup_notes": "D1路1: 从年报附注/管理层讨论找异常解释",
+      "d1_hypothesis": "D1路2: 基于宏观事实+财务画像推演假设",
+      "d2_probability": "D2: 综合双路径结果分配概率",
+      "e2_report": "E2: 生成报告中的多空逻辑栈文本"
+    },
+    "removed": ["a1_tagging.yaml（A1 不再调 LLM）"]
+  },
+
+  "tests": {
+    "total": 26,
+    "passed": 26,
+    "failed": 0,
+    "coverage": {
+      "schemas": "Pydantic 模型系列化（含 FinancialProfile）",
+      "llm": "PromptLoader 渲染、ResponseParser 解析",
+      "pipeline": "Orchestrator 调度、StepRegistry 注册",
+      "layers": "A2 余弦匹配、B1 校验逻辑、C层MAD、E1评分逻辑"
+    },
+    "gaps": [
+      "无 layer_0 单元测试（需 pdfplumber + 实际 PDF）",
+      "无 layer_bplus 测试",
+      "无 layer_d 测试",
+      "无集成测试 mock 完整数据流"
+    ]
+  },
+
+  "key_technical_decisions": [
+    "PDF 解析：仅 pdfplumber，无 MinerU/OCR",
+    "硬标签：仅同花顺行业分类 CSV，代码查表，无 LLM",
+    "财务画像：A2 从 akshare 实际数据计算 6 维等级，非 LLM 猜测",
+    "同行匹配：余弦相似度 + 双池（Top 5 展示 + Top 20% MAD）",
+    "异常检测：MAD 中位数绝对偏差（抗暴雷）",
+    "评分公式：100 - (C层扣分 + B+层扣分)，偏离度放大",
+    "LLM 统一网关：Anthropic 主 + OpenAI 备"
+  ],
+
+  "dependency_status": {
+    "core": ["pydantic", "pyyaml", "jinja2", "httpx"],
+    "pdf": ["pdfplumber"],
+    "llm": ["anthropic", "openai"],
+    "finance": ["akshare", "pandas", "numpy"],
+    "dev": ["pytest", "ruff"],
+    "missing": ["akshare 需确认 Python 3.14 兼容性"]
+  },
+
+  "next_steps_by_priority": [
+    {
+      "priority": 1,
+      "task": "跑通 pdfplumber → chunker → merger 链路",
+      "detail": "拿一份实际年报 PDF，验证解析+切分+表格合并效果",
+      "depends_on": ["实际 PDF 样本"]
+    },
+    {
+      "priority": 2,
+      "task": "B0/B1 对接实际 financial_data",
+      "detail": "LLM 识别表头 → Pandas 提取数值，验证提取准确率",
+      "depends_on": ["第0层输出"]
+    },
+    {
+      "priority": 3,
+      "task": "B+ 层对接实际财务数据",
+      "detail": "净现比/存贷双高/母子分离度 三项规则验证",
+      "depends_on": ["B1 层输出"]
+    },
+    {
+      "priority": 4,
+      "task": "D 层 LLM 调用链路打通",
+      "detail": "D1 双路径 + D2 概率分配，端到端跑通推理",
+      "depends_on": ["B+/C 层输出"]
+    },
+    {
+      "priority": 5,
+      "task": "E 层完整报告输出",
+      "detail": "打分 + 报告生成，验证完整 A→E 流程",
+      "depends_on": ["D 层输出"]
+    }
+  ],
+
+  "project_organization": {
+    "project_lead": "用户（本人）",
+    "lead_responsibility": "A 层（行业基准）+ 架构设计 + 第0层",
+    "teammate_responsibility": "B 层提取 + B+ 层逻辑 + D 层推理",
+    "teammate_tasks_file": "doc/teammate-tasks.json"
+  }
+}

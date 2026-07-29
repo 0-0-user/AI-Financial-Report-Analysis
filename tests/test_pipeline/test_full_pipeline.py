@@ -41,7 +41,7 @@ def _make_full_context() -> PipelineContext:
             HardTag(system="同花顺二级行业", value="饮料制造"),
         ],
         financial_profile=FinancialProfile(
-            levels=["极高", "极高", "低", "低", "低", "高"],
+            values=[1.0, 1.0, 0.2, 0.2, 0.2, 0.8],
         ),
     )
     ctx.macro_facts = [

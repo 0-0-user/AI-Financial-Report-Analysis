@@ -1,15 +1,19 @@
-"""D1路1：从年报附注和管理层讨论中查找异常的解释
+"""D1路1：年报原文搬运工——原文说啥搬啥
 
 职责：
-- 根据异常指标关键词，在年报原文中搜索相关段落
-- 调用 LLM 提取关键解释信息
-- 标注原文是否含糊其辞
+- 接收年报原文（MD&A + 附注）+ 异常清单
+- LLM 全权翻阅原文，找出与异常指标相关的解释
+- 按显要程度排序（篇幅最长、位置最前 = 最可信）
+- 不调自身常识、不做推测发散
 
-LLM 不可用时降级为关键词匹配 + 直接引用原文。
+错误处理：
+- LLM 调用失败 → 异常直接向上传播（不做降级）
+- 整个 D 层及后续分析中断
 """
 
 import json
 import logging
+import re
 from typing import Any
 
 from schemas.raw_doc import RawDocument
@@ -23,35 +27,39 @@ logger = logging.getLogger(__name__)
 # ────────────────────────────────────────────
 
 def lookup_in_annual_report(raw_doc: RawDocument, anomaly: Any) -> list[Explanation]:
-    """大模型读取年报原文，查找与异常指标相关的解释
+    """路1：从年报原文中找出异常指标的解释
+
+    纯搬运逻辑：
+    - 全量原文传给 LLM，不做关键词预过滤
+    - LLM 失败时异常直抛，不做降级
 
     Args:
-        raw_doc: 第0层输出的 RawDocument
+        raw_doc: 第 0 层输出的 RawDocument（管理层讨论 + 附注）
         anomaly: LogicAnomaly 或 DeviationAnomaly
 
     Returns:
-        Explanation 列表（可能为空 = 无直接解释）
+        按显要程度排序的 Explanation 列表（可能为空）
+
+    Raises:
+        Exception: LLM 调用失败时向上传播
     """
-    # 提取异常指标名称和关键词
     indicator_name = _extract_indicator_name(anomaly)
-    keywords = _indicator_to_keywords(indicator_name)
+    actual_value = _extract_actual_value(anomaly)
+    deviation_text = _format_deviation(anomaly)
 
-    # 搜索相关段落
-    sections = _find_relevant_sections(raw_doc, keywords)
+    # 准备原文全文（不预过滤）
+    md_text = _build_md_text(raw_doc.management_discussion)
+    footnotes_text = _build_footnotes_text(raw_doc.footnotes)
 
-    if not sections:
-        return []
+    return _llm_lookup(indicator_name, actual_value, deviation_text, md_text, footnotes_text)
 
-    # 尝试 LLM 提取
-    try:
-        return _llm_lookup(indicator_name, sections, anomaly)
-    except Exception as e:
-        logger.warning(f"LLM 查原文失败，降级为规则提取: {e}")
-        return _rule_based_lookup(indicator_name, sections)
 
+# ────────────────────────────────────────────
+# 从异常对象提取信息
+# ────────────────────────────────────────────
 
 def _extract_indicator_name(anomaly: Any) -> str:
-    """从 anomally 对象中提取指标名"""
+    """从 anomaly 对象中提取指标名"""
     for attr in ["indicator", "check_name"]:
         name = getattr(anomaly, attr, None)
         if name:
@@ -59,161 +67,160 @@ def _extract_indicator_name(anomaly: Any) -> str:
     return str(anomaly)
 
 
-def _indicator_to_keywords(indicator_name: str) -> list[str]:
-    """将指标名映射为搜索关键词"""
-    keyword_map = {
-        "存货周转率": ["存货", "跌价", "库存", "库龄", "备货"],
-        "应收账款周转率": ["应收", "回款", "账龄", "坏账", "信用"],
-        "毛利率": ["毛利", "成本", "定价", "原材料", "采购价格"],
-        "净利率": ["净利", "费用", "利润", "盈利"],
-        "资产负债率": ["负债", "借款", "贷款", "融资", "杠杆"],
-        "流动比率": ["流动", "短期偿债", "营运资金"],
-        "营业收入增长率": ["收入", "销售", "营收增长", "市场"],
-        "净利润增长率": ["净利", "利润增长", "盈利"],
-        "净现比": ["现金流", "经营现金流", "回款", "应收应付"],
-        "收现比": ["销售回款", "现金收入", "收款"],
-        "存贷双高": ["货币资金", "借款", "存款", "贷款", "资金"],
-        "母子资金分离度": ["子公司", "母公司", "资金归集", "归集", "财务公司"],
-        "ROE": ["净资产收益率", "股东回报", "盈利"],
-        "ROA": ["总资产收益率", "资产回报"],
-    }
-    return keyword_map.get(indicator_name, [indicator_name])
+def _extract_actual_value(anomaly: Any) -> str:
+    """提取实际值描述"""
+    for attr in ["actual_value", "value"]:
+        v = getattr(anomaly, attr, None)
+        if v is not None:
+            return str(v)
+    return "未知"
+
+
+def _format_deviation(anomaly: Any) -> str:
+    """格式偏离度描述"""
+    mad = getattr(anomaly, "mad_multiple", None)
+    if mad is not None:
+        severity = "极端" if mad >= 5.0 else "显著" if mad >= 2.0 else "轻微"
+        return f"偏离同行中位数 {mad:.1f} 倍 MAD（{severity}）"
+
+    value = getattr(anomaly, "value", None)
+    threshold = getattr(anomaly, "threshold", None)
+    if value is not None:
+        return f"实际值={value}" + (f"，阈值={threshold}" if threshold else "")
+
+    return "偏离度未知"
 
 
 # ────────────────────────────────────────────
-# 搜索相关段落
+# 原文文本构建
 # ────────────────────────────────────────────
 
-def _find_relevant_sections(raw_doc: RawDocument, keywords: list[str]) -> list[dict]:
-    """根据关键词在年报原文中定位相关段落
+def _build_md_text(management_discussion: Any) -> str:
+    """将管理层讨论与分析部分拼接为全文文本"""
+    sections = getattr(management_discussion, "sections", [])
+    if not sections:
+        return "（无管理层讨论与分析内容）"
 
-    搜索范围：
-    - 附注明细（footnotes.items）
-    - 管理层讨论与分析（management_discussion.sections）
+    lines = []
+    for sec in sections:
+        title = sec.get("title", "") if isinstance(sec, dict) else getattr(sec, "title", "")
+        content = sec.get("content", "") if isinstance(sec, dict) else getattr(sec, "content", "")
+        page = sec.get("page_number", 0) if isinstance(sec, dict) else getattr(sec, "page_number", 0)
+        lines.append(f"=== {title}（第{page}页）===\n{content}")
 
-    返回：匹配到的段落列表 [{"name": str, "content": str, "page_number": int}, ...]
-    """
-    sections: list[dict] = []
+    return "\n\n".join(lines)
 
-    for item in raw_doc.footnotes.items[:]:
-        item_name = (item.get("name", "") or "").lower()
-        item_content = (item.get("content", "") or "").lower()
-        combined = item_name + " " + item_content
-        if any(kw.lower() in combined for kw in keywords):
-            sections.append({
-                "type": "附注",
-                "name": item.get("name", "附注条目"),
-                "content": item.get("content", ""),
-                "page_number": item.get("page_number", 0),
-            })
 
-    for section in raw_doc.management_discussion.sections[:]:
-        title = (section.get("title", "") or "").lower()
-        content = (section.get("content", "") or "").lower()
-        combined = title + " " + content
-        if any(kw.lower() in combined for kw in keywords):
-            sections.append({
-                "type": "管理层讨论",
-                "name": section.get("title", "管理层讨论"),
-                "content": section.get("content", ""),
-                "page_number": section.get("page_number", 0),
-            })
+def _build_footnotes_text(footnotes: Any) -> str:
+    """将附注明细拼接为全文文本"""
+    items = getattr(footnotes, "items", [])
+    if not items:
+        return "（无附注内容）"
 
-    # 限制数量避免 prompt 过长
-    return sections[:8]
+    lines = []
+    for item in items:
+        name = item.get("name", "") if isinstance(item, dict) else getattr(item, "name", "")
+        content = item.get("content", "") if isinstance(item, dict) else getattr(item, "content", "")
+        page = item.get("page_number", 0) if isinstance(item, dict) else getattr(item, "page_number", 0)
+        is_table = item.get("is_table", False) if isinstance(item, dict) else getattr(item, "is_table", False)
+        tag = " [表格]" if is_table else ""
+        lines.append(f"【{name}】（第{page}页）{tag}\n{content}")
+
+    return "\n\n".join(lines)
 
 
 # ────────────────────────────────────────────
-# LLM 提取
+# LLM 调用
 # ────────────────────────────────────────────
 
 def _llm_lookup(
     indicator: str,
-    sections: list[dict],
-    anomaly: Any,
+    actual_value: str,
+    deviation: str,
+    md_text: str,
+    footnotes_text: str,
 ) -> list[Explanation]:
-    """调用 LLM 从相关段落中提取客观解释"""
+    """调用 LLM 翻阅原文，提取解释并按显要程度排序
+
+    知识源约束（路1 隔离规则）：
+    - 仅接收 raw_doc（md_text + footnotes_text）+ 异常清单
+    - 不接收任何 A 层数据（macro_facts, tags, financial_profile）
+    - LLM 仅做提取，不得用自身知识补充
+    """
     from llm.client import LLMClient
-
-    # 构建搜索内容摘要
-    relevant_text = _build_section_summary(sections)
-
-    # 获取偏差倍数
-    deviation_str = "未知"
-    if hasattr(anomaly, "mad_multiple"):
-        deviation_str = f"{anomaly.mad_multiple:.1f} 倍 MAD"
-    actual_value = getattr(anomaly, "actual_value", "未知")
 
     client = LLMClient()
     response = client.chat(
         "d1_lookup_notes",
         {
             "indicator": indicator,
-            "actual_value": str(actual_value),
-            "deviation": deviation_str,
-            "relevant_sections": relevant_text,
+            "actual_value": actual_value,
+            "deviation": deviation,
+            "md_text": md_text,
+            "footnotes_text": footnotes_text,
         },
     )
 
-    return _parse_llm_lookup_result(response if isinstance(response, str) else str(response))
+    raw = response if isinstance(response, str) else str(response)
+    return _parse_result(raw)
 
 
-def _build_section_summary(sections: list[dict]) -> str:
-    """构建段落摘要文本"""
-    lines = []
-    for s in sections:
-        content_preview = s["content"][:600] if s["content"] else "(无内容)"
-        lines.append(
-            f"[{s['type']}] {s['name']} (第{s['page_number']}页)\n{content_preview}"
-        )
-    return "\n\n---\n\n".join(lines) if lines else "(未找到相关段落)"
+# ────────────────────────────────────────────
+# 结果解析
+# ────────────────────────────────────────────
 
-
-def _parse_llm_lookup_result(raw: str) -> list[Explanation]:
-    """解析 LLM 返回的原文解释结果"""
+def _parse_result(raw: str) -> list[Explanation]:
+    """解析 LLM 返回的 JSON，转换为 Explanation 列表"""
     try:
-        # 尝试 JSON 数组格式
         data = json.loads(raw)
-        if not isinstance(data, list):
-            data = [data]
-        return [
-            Explanation(
-                summary=d.get("summary", ""),
-                source_text=d.get("source_text", d.get("excerpt", "")),
-                page_number=d.get("page_number", 0),
-                is_vague=d.get("is_vague", d.get("vague", False)),
-            )
-            for d in data
-        ]
-    except (json.JSONDecodeError, TypeError, KeyError):
-        # 解析失败，返回原始文本作为一条解释
-        if raw and raw.strip() and "无直接解释" not in raw:
-            return [Explanation(
-                summary=f"LLM 原始输出（未解析）",
-                source_text=raw[:300],
-                page_number=0,
-                is_vague=True,
-            )]
+    except json.JSONDecodeError:
+        logger.warning(f"LLM 返回非 JSON 格式，尝试提取 JSON 块: {raw[:100]}")
+        match = re.search(r'\{[\s\S]*\}', raw)
+        if not match:
+            logger.error(f"无法解析 LLM 输出: {raw[:200]}")
+            return []
+        data = json.loads(match.group(0))
+
+    explanations = data.get("explanations", []) if isinstance(data, dict) else data
+    if not isinstance(explanations, list):
         return []
 
+    results = []
+    for item in explanations:
+        if not isinstance(item, dict):
+            continue
+        explanation_text = item.get("explanation", "")
+        if not explanation_text:
+            continue
 
-# ────────────────────────────────────────────
-# 规则降级路径
-# ────────────────────────────────────────────
+        rank = int(item.get("confidence_rank", 1))
+        sources = item.get("sources", [])
 
-def _rule_based_lookup(indicator: str, sections: list[dict]) -> list[Explanation]:
-    """无 LLM 时的关键词匹配降级方案"""
-    explanations = []
-    for s in sections[:3]:  # 最多取 3 条
-        # 简单的模糊判断：如果内容较短且含数字，视为较可信
-        content = s.get("content", "")
-        is_vague = len(content) < 80  # 内容太短视为含糊
+        # 取第一条 source 作为主要来源
+        primary_source = sources[0] if sources else {}
+        source_type = primary_source.get("type", "年报原文")
+        location = primary_source.get("location", "")
+        excerpt = primary_source.get("excerpt", "")
 
-        explanations.append(Explanation(
-            summary=f"年报{s['type']}提及 {indicator}",
-            source_text=content[:300],
-            page_number=s.get("page_number", 0),
-            is_vague=is_vague,
+        # 从 location 提取页码
+        page_number = _extract_page_number(location)
+
+        results.append(Explanation(
+            summary=explanation_text,
+            source_text=excerpt,
+            page_number=page_number,
+            is_vague=False,          # 路1 不做模糊判断，原文有就是有
+            confidence_rank=rank,
         ))
 
-    return explanations
+    # 按 confidence_rank 升序排列（1 排最前）
+    results.sort(key=lambda x: x.confidence_rank)
+    return results
+
+
+def _extract_page_number(location: str) -> int:
+    """从"第15页"、"15页"或"15"中提取页码"""
+    if not location:
+        return 0
+    match = re.search(r'(\d+)', location)
+    return int(match.group(1)) if match else 0

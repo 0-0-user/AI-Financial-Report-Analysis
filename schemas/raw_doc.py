@@ -3,8 +3,8 @@
  schemas/raw_doc.py — 第0层：PDF提取结果的数据结构
 ==========================================================
 
-本文件定义了 MinerU 等 PDF 解析工具将年报拆解后的标准输出格式。
-一份年报 PDF 经过第0层处理后，输出一个 RawDocument 对象，
+本文件定义了 PDF 解析工具将年报拆解后的标准输出格式。
+一份年报 PDF 经过第0层（pdfplumber）处理后，输出一个 RawDocument 对象，
 包含四大区块（财务数据、管理层讨论、附注、公司基本情况）。
 
 数据流向：
@@ -79,7 +79,7 @@ class DocumentMetadata(BaseModel):
     file_name: str                               # 文件名
     page_count: int                              # 总页数
     report_year: Optional[int] = None            # 年报年份
-    extract_tool: str = "mineru"                 # 解析工具
+    extract_tool: str = "pdfplumber"                 # 解析工具
     extract_date: Optional[str] = None           # 解析日期
 
 

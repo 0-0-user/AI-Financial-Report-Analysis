@@ -42,13 +42,8 @@ class TestPeerMatching:
 
     def test_financial_profile_numeric(self):
         """FinancialProfile 数值映射应正确"""
-        fp = FinancialProfile(levels=["极高", "极高", "低", "低", "低", "高"])
+        fp = FinancialProfile(values=[1.0, 1.0, 0.2, 0.2, 0.2, 0.8])
         expected = [1.0, 1.0, 0.2, 0.2, 0.2, 0.8]
         assert fp.as_numeric == expected
-
-    def test_financial_profile_empty_levels(self):
-        """未知等级应映射为 0.0"""
-        fp = FinancialProfile(levels=["极高", "未知", "低", "低", "低", "高"])
-        nums = fp.as_numeric
-        assert nums[1] == 0.0  # "未知" 映射为 0
-        assert nums[0] == 1.0
+        # as_numeric 与 values 指向同一数据
+        assert fp.values == expected

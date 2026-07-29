@@ -3,12 +3,13 @@
 职责：
 - 从同花顺行业分类 CSV 获取二级行业同行池
 - 通过 akshare 在线获取同行财务数据（内存缓存，不落盘）
-- 5 年财务数据 → 逐维中位数合并 → 6 维数值向量
+- 5 年财务数据 → 稳健标准化 → 逐维中位数合并 → 6 维连续值向量
 - 余弦相似度排序 → Top 5（E层展示）+ Top 20%（C层MAD基准）
 
 设计约束：
 - 纯代码实现，不涉及任何 LLM 调用
 - 数据通过 akshare 实时获取 + 内存缓存，不写磁盘文件
+- 不再经过离散等级中转，原始连续值直接标准化后做余弦相似度
 """
 
 import csv
@@ -18,7 +19,7 @@ import statistics
 from pathlib import Path
 from typing import Optional
 
-from schemas.tags import CompanyTags, FinancialProfile
+from schemas.tags import CompanyTags, FinancialProfile, FINANCIAL_DIMENSIONS
 from schemas.benchmark import Benchmark, PeerCompany, IndustryProfile
 
 logger = logging.getLogger(__name__)
@@ -29,12 +30,9 @@ logger = logging.getLogger(__name__)
 _INDUSTRY_CSV_PATH = Path("data/industry/thf_industry_classification.csv")
 
 # 6 维特征顺序（与 FINANCIAL_DIMENSIONS 一致）
-_DIMENSION_NAMES = [
-    "毛利率水平", "净利率水平", "总资产周转率",
-    "资产负债率", "研发费用率", "销售费用率",
-]
+_DIMENSION_NAMES = FINANCIAL_DIMENSIONS  # 用全局统一顺序
 
-# CSV → 内部字段名映射
+# 维度名 → akshare 列名映射
 _DIMENSION_TO_COLUMN = {
     "毛利率水平": "毛利率", "净利率水平": "净利率",
     "总资产周转率": "总资产周转率", "资产负债率": "资产负债率",
@@ -66,6 +64,14 @@ _FINANCIAL_CACHE: dict[str, list[dict]] = {}
 def run_matching(tags: CompanyTags) -> Benchmark:
     """匹配相似企业并计算基准
 
+    流程（两遍扫描，砍掉等级中转）：
+        1. 从硬标签确定二级行业，获取同行池
+        2. 一次性拉取目标 + 全部同行的原始财务数据
+        3. 计算 6 维稳健标准化统计量（median / IQR）
+        4. 标准化目标公司数据 → 中位数合并 → 6 维连续值向量
+        5. 标准化每家同行数据 → 中位数合并 → 6 维连续值向量
+        6. 余弦相似度排序 → Top 5 + Top 20%（MAD 基准池）
+
     Args:
         tags: A1 层输出的 CompanyTags
               （含 hard_tags；financial_profile 由本函数从 akshare 计算）
@@ -73,16 +79,8 @@ def run_matching(tags: CompanyTags) -> Benchmark:
     Returns:
         Benchmark（同行列表 + 横向中位数）
     """
-    # 从 akshare 实际数据计算目标公司的财务画像
-    if not tags.financial_profile:
-        target_profile = _compute_target_profile(tags.stock_code, tags.company_name)
-        if target_profile:
-            tags.financial_profile = target_profile
-        else:
-            logger.warning("目标公司无财务数字画像，返回空基准")
-            return _empty_benchmark(tags)
-
-    target_vec = tags.financial_profile.as_numeric
+    stock_code = tags.stock_code
+    company_name = tags.company_name
 
     # 从硬标签提取二级行业
     industry_name = _extract_industry_level2(tags.hard_tags)
@@ -90,7 +88,7 @@ def run_matching(tags: CompanyTags) -> Benchmark:
         logger.warning("无法确定二级行业，返回空基准")
         return _empty_benchmark(tags)
 
-    # 获取同行池（同二级行业的所有公司代码）
+    # 获取同行池
     peers = _load_peer_pool(industry_name)
     if not peers:
         logger.warning(f"行业 [{industry_name}] 在 CSV 中无数据")
@@ -99,13 +97,39 @@ def run_matching(tags: CompanyTags) -> Benchmark:
     peer_count = len(peers)
     logger.info(f"行业 [{industry_name}] 共 {peer_count} 家同行")
 
-    # 通过 akshare 获取财务数据（内存缓存）
-    peer_vectors = _fetch_and_compute_vectors(peers)
+    # ── Phase 1: 拉取全部原始数据 ──
+    raw_data = _fetch_all_financial_data(stock_code, peers)
+    if stock_code not in raw_data or not raw_data[stock_code]:
+        logger.warning(f"目标公司 {company_name}({stock_code}) 无财务数据")
+        return _empty_benchmark(tags, industry_name)
+
+    # ── Phase 2: 计算标准化统计量 ──
+    all_values: list[list[float]] = []
+    for code, year_data in raw_data.items():
+        for yr in year_data:
+            raw_vec = _extract_raw_values(yr)
+            if raw_vec is not None:
+                all_values.append(raw_vec)
+
+    if not all_values:
+        logger.warning("同行池无有效财务数据")
+        return _empty_benchmark(tags, industry_name)
+
+    stats = _compute_robust_stats(all_values)
+    logger.info(f"稳健标准化统计量计算完成（{len(all_values)} 个样本点）")
+
+    # ── Phase 3: 标准化目标公司 ──
+    target_year_data = raw_data[stock_code]
+    target_vec = _normalize_merge_vector(target_year_data, stats)
+    tags.financial_profile = FinancialProfile(values=target_vec)
+
+    # ── Phase 4: 标准化同行 ──
+    peer_vectors = _build_peer_vectors_from_raw(raw_data, peers, stats)
     if not peer_vectors:
         logger.warning("未能获取同行财务数据")
         return _empty_benchmark(tags, industry_name)
 
-    # 余弦相似度排序
+    # ── Phase 5: 余弦相似度排序 ──
     scored = _cosine_rank(target_vec, peer_vectors)
 
     # 双池
@@ -286,22 +310,152 @@ def _parse_akshare_df(df, stock_code: str) -> list[dict]:
     return records
 
 
-def _fetch_and_compute_vectors(peers: list[dict]) -> list[dict]:
-    """对每家公司获取数据并计算等级向量"""
+def _fetch_all_financial_data(
+    target_code: str, peers: list[dict]
+) -> dict[str, list[dict]]:
+    """一次性拉取目标公司 + 全部同行的原始财务数据（利用内存缓存）"""
+    result: dict[str, list[dict]] = {}
+
+    # 目标公司
+    target_data = _fetch_financial_data(target_code)
+    if target_data:
+        result[target_code] = target_data
+
+    # 全部同行
+    for peer in peers:
+        code = peer["code"]
+        data = _fetch_financial_data(code)
+        if data:
+            result[code] = data
+
+    logger.info(f"已获取 {len(result)} 家公司的原始财务数据")
+    return result
+
+
+# ────────────────────────────────────────────
+# 原始值提取 & 稳健标准化
+# ────────────────────────────────────────────
+
+
+def _extract_raw_values(financial_data: dict) -> Optional[list[float]]:
+    """从一行 akshare 数据提取 6 维原始值（不经过离散化）
+
+    Returns:
+        [毛利率, 净利率, 周转率, 负债率, 研发率, 销售率]
+        任一维为 None 时整体返回 None
+    """
+    values = []
+    for dim_name in _DIMENSION_NAMES:
+        col = _DIMENSION_TO_COLUMN.get(dim_name, dim_name)
+        val = financial_data.get(col)
+        if val is None:
+            return None
+        try:
+            values.append(float(val))
+        except (ValueError, TypeError):
+            return None
+    return values
+
+
+def _compute_robust_stats(all_values: list[list[float]]) -> dict[str, list[float]]:
+    """对 6 维数据分别计算中位数和 IQR（稳健标准化参数）
+
+    Args:
+        all_values: [[v1_dim0, v1_dim1, ...], [v2_dim0, ...], ...]
+
+    Returns:
+        {"medians": [m0, ..., m5], "iqrs": [iqr0, ..., iqr5]}
+    """
+    if not all_values:
+        return {"medians": [0.0] * 6, "iqrs": [1.0] * 6}
+
+    dim_count = 6
+    medians, iqrs = [], []
+
+    for dim in range(dim_count):
+        vals = sorted(row[dim] for row in all_values if row is not None)
+        if not vals:
+            medians.append(0.0)
+            iqrs.append(1.0)
+            continue
+
+        median = statistics.median(vals)
+        medians.append(median)
+
+        # IQR = Q3 - Q1
+        n = len(vals)
+        q1 = vals[n // 4] if n > 1 else vals[0]
+        q3 = vals[(3 * n) // 4] if n > 1 else vals[-1]
+        iqr = q3 - q1
+        iqrs.append(max(iqr, 1e-10))  # 避免除零
+
+    return {"medians": medians, "iqrs": iqrs}
+
+
+def _robust_scale_vector(
+    values: list[float], stats: dict[str, list[float]]
+) -> list[float]:
+    """用预先算好的统计量对 6 维向量做稳健标准化
+
+    公式: (x - median) / IQR
+    """
+    result = []
+    for i, v in enumerate(values):
+        median = stats["medians"][i]
+        iqr = stats["iqrs"][i]
+        result.append((v - median) / iqr)
+    return result
+
+
+def _merge_continuous_values(value_arrays: list[list[float]]) -> list[float]:
+    """多年连续值 → 逐维中位数合并"""
+    if not value_arrays:
+        return [0.0] * 6
+    if len(value_arrays) == 1:
+        return value_arrays[0]
+
+    merged = []
+    for dim_idx in range(6):
+        vals = sorted(row[dim_idx] for row in value_arrays)
+        merged.append(statistics.median(vals))
+    return merged
+
+
+def _normalize_merge_vector(
+    year_data: list[dict], stats: dict[str, list[float]]
+) -> list[float]:
+    """对一年或多年的原始财务数据：提取 → 标准化 → 中位数合并
+
+    Returns: 6 维连续值向量（稳健标准化后）
+    """
+    normalized = []
+    for yr in year_data:
+        raw = _extract_raw_values(yr)
+        if raw is not None:
+            normalized.append(_robust_scale_vector(raw, stats))
+
+    if not normalized:
+        return [0.0] * 6
+    return _merge_continuous_values(normalized)
+
+
+def _build_peer_vectors_from_raw(
+    raw_data: dict[str, list[dict]],
+    peers: list[dict],
+    stats: dict[str, list[float]],
+) -> list[dict]:
+    """从已获取的原始数据构建同行向量"""
     result = []
     for peer in peers:
         code = peer["code"]
-        year_data = _fetch_financial_data(code)
+        year_data = raw_data.get(code)
         if not year_data:
             continue
 
-        # 每行 → 等级数组
-        level_arrays = [_compute_level_array(yr) for yr in year_data]
-        merged = _merge_levels_by_median(level_arrays)
-        numeric_vec = FinancialProfile(levels=merged).as_numeric
+        merged_vec = _normalize_merge_vector(year_data, stats)
 
-        # 最新年份的财务数据
-        latest = year_data[0] if year_data else {}
+        # 最新年份原始财务数据（用于展示）
+        latest = year_data[0]
         financials = {}
         for dim in _DIMENSION_NAMES:
             col = _DIMENSION_TO_COLUMN.get(dim, dim)
@@ -311,8 +465,7 @@ def _fetch_and_compute_vectors(peers: list[dict]) -> list[dict]:
             "stock_code": code,
             "name": peer["name"],
             "financials": financials,
-            "level_array": merged,
-            "numeric_vector": numeric_vec,
+            "numeric_vector": merged_vec,
             "similarity_score": 0.0,
         })
 
@@ -320,86 +473,8 @@ def _fetch_and_compute_vectors(peers: list[dict]) -> list[dict]:
 
 
 # ────────────────────────────────────────────
-# 等级映射 & 余弦相似度
+# 余弦相似度
 # ────────────────────────────────────────────
-
-# 等级阈值（从 YAML 惰性加载）
-_LEVEL_THRESHOLDS: dict[str, list[tuple[str, float]]] | None = None
-
-
-def _load_thresholds():
-    global _LEVEL_THRESHOLDS
-    if _LEVEL_THRESHOLDS is not None:
-        return _LEVEL_THRESHOLDS
-
-    config_path = Path("config/industry_tags.yaml")
-    if not config_path.exists():
-        _LEVEL_THRESHOLDS = {}
-        return _LEVEL_THRESHOLDS
-
-    import yaml
-    with open(config_path, encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    dims = config.get("financial_profile", {}).get("dimensions", [])
-    th = {}
-    for d in dims:
-        name = d["name"]
-        th[name] = sorted(d["thresholds"].items(), key=lambda x: -x[1])
-    _LEVEL_THRESHOLDS = th
-    return th
-
-
-def _value_to_level(value, thresholds) -> str:
-    for level, threshold in thresholds:
-        if float(value) >= threshold:
-            return level
-    return thresholds[-1][0] if thresholds else "中"
-
-
-def _compute_level_array(financial_data: dict) -> list[str]:
-    """一行财务数据 → 6 维等级数组"""
-    thresholds = _load_thresholds()
-    levels = []
-    for dim_name in _DIMENSION_NAMES:
-        col = _DIMENSION_TO_COLUMN.get(dim_name, dim_name)
-        val = financial_data.get(col)
-        dim_th = thresholds.get(dim_name, [])
-        if val is None or not dim_th:
-            levels.append("中")
-        else:
-            levels.append(_value_to_level(val, dim_th))
-    return levels
-
-
-def _merge_levels_by_median(level_arrays: list[list[str]]) -> list[str]:
-    """多年等级 → 逐维中位数合并"""
-    if not level_arrays:
-        return ["中"] * 6
-    if len(level_arrays) == 1:
-        return level_arrays[0]
-
-    from schemas.tags import LEVEL_TO_SCORE
-    score_matrix = [
-        [LEVEL_TO_SCORE.get(lv, 0.5) for lv in arr]
-        for arr in level_arrays
-    ]
-    merged = []
-    for dim_idx in range(6):
-        vals = sorted(row[dim_idx] for row in score_matrix)
-        median_val = statistics.median(vals)
-        merged.append(_nearest_level(median_val))
-    return merged
-
-
-def _nearest_level(score: float) -> str:
-    from schemas.tags import LEVEL_TO_SCORE
-    best, best_dist = "中", float("inf")
-    for level, s in LEVEL_TO_SCORE.items():
-        d = abs(score - s)
-        if d < best_dist:
-            best_dist, best = d, level
-    return best
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -415,28 +490,6 @@ def _cosine_rank(target_vec: list[float], peers: list[dict]) -> list[dict]:
             _cosine_similarity(target_vec, p["numeric_vector"]), 4
         )
     return sorted(peers, key=lambda p: -p["similarity_score"])
-
-
-def _compute_target_profile(stock_code: str, company_name: str) -> Optional[FinancialProfile]:
-    """从 akshare 实际财务数据计算目标公司的 6 维等级画像
-
-    复用同行计算逻辑：
-    - _fetch_financial_data() → 5 年原始财务数据
-    - _compute_level_array() → 每年 6 维等级
-    - _merge_levels_by_median() → 逐维中位数合并
-    """
-    if not stock_code:
-        logger.warning(f"目标公司 {company_name} 无股票代码")
-        return None
-
-    year_data = _fetch_financial_data(stock_code)
-    if not year_data:
-        logger.warning(f"akshare 未获取到 {company_name}({stock_code}) 的财务数据")
-        return None
-
-    level_arrays = [_compute_level_array(yr) for yr in year_data]
-    merged = _merge_levels_by_median(level_arrays)
-    return FinancialProfile(levels=merged)
 
 
 # ────────────────────────────────────────────

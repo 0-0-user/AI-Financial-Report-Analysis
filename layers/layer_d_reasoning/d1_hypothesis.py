@@ -1,15 +1,28 @@
-"""D1路2：不看原文，基于宏观事实和行业标签推演假设
+"""D1路2：外部情报推演——不看原文，基于外部信息发散假设
 
 职责：
-- 接收异常指标 + 宏观事实 + 行业标签 + 偏离数据
-- 调用 LLM 发散出互斥的合理解释假设
-- 每条假设标注推演依据来源
+- 接收异常清单 + 行业标签 + A0 宏观事实 + 公司基本情况 + LLM 自身常识
+- LLM 基于多源信息发散出互斥的合理解释
+- 按来源权威性 × 共识强度排序
 
-LLM 不可用时降级为模板化假设生成。
+知识源（仅限以下）：
+1. 行业标签（同花顺行业分类）
+2. 外部宏观事实（A0 层 4 维度）
+3. LLM 自身商业与行业预训练知识
+4. 公司基本情况（主营业务描述）
+
+禁止使用：
+- 年报原文（MD&A / 附注）
+- 财务画像（FinancialProfile）
+
+错误处理：
+- LLM 调用失败 → 异常直接向上传播（不做降级）
+- 整个 D 层及后续分析中断
 """
 
 import json
 import logging
+import re
 from typing import Any, Optional
 
 from schemas.tags import CompanyTags
@@ -26,79 +39,47 @@ def generate_hypotheses(
     anomaly: Any,
     macro_facts: list[str],
     tags: Optional[CompanyTags] = None,
-    deviation: Optional[Any] = None,
+    business_desc: str = "",
 ) -> list[Hypothesis]:
-    """大模型基于宏观背景和行业常识，发散出合理的假设解释异常
+    """路2：基于外部信息 + 行业常识推演假设
 
     Args:
         anomaly: LogicAnomaly 或 DeviationAnomaly
         macro_facts: A0 层输出的宏观事实列表
-        tags: A1 层输出的 CompanyTags
-        deviation: C 层偏差对象（可选，有 mad_multiple 等属性）
+        tags: A1 层输出的 CompanyTags（仅使用 hard_tags）
+        business_desc: A1 层提取的公司主营业务描述
 
     Returns:
-        Hypothesis 列表，最多 4 条，每条包含假设内容、推演依据、来源
+        按多源交叉排序的 Hypothesis 列表
+
+    Raises:
+        Exception: LLM 调用失败时向上传播
     """
-    # 构建 prompt 上下文
-    context = _build_hypothesis_context(anomaly, macro_facts, tags, deviation)
-
-    # 尝试 LLM 生成
-    try:
-        return _llm_generate_hypotheses(context)
-    except Exception as e:
-        logger.warning(f"LLM 推演假设失败，降级为模板生成: {e}")
-        return _template_hypotheses(anomaly, macro_facts, tags, deviation)
-
-
-# ────────────────────────────────────────────
-# Prompt 上下文构建
-# ────────────────────────────────────────────
-
-def _build_hypothesis_context(
-    anomaly: Any,
-    macro_facts: list[str],
-    tags: Optional[CompanyTags],
-    deviation: Optional[Any],
-) -> dict:
-    """组装推演 prompt 所需的完整上下文
-
-    返回结构：
-    {
-        "indicator": "存货周转率",
-        "deviation": "偏离同行中位数 3.2 倍 MAD",
-        "macro_facts": "1. 硅料价格下跌20%...",
-        "industry_tags": "白酒; 重资产; 高毛利; To-C端"
-    }
-    """
-    indicator = _extract_name(anomaly)
-    deviation_text = _format_deviation(deviation or anomaly)
+    indicator_name = _extract_indicator_name(anomaly)
+    actual_value = _extract_actual_value(anomaly)
+    deviation_text = _format_deviation(anomaly)
+    industry_text = _format_industry_tags(tags)
 
     macro_text = "\n".join(
-        f"{i+1}. {fact}" for i, fact in enumerate(macro_facts[:5])
+        f"{i+1}. {fact}" for i, fact in enumerate(macro_facts)
     ) if macro_facts else "（无宏观事实数据）"
 
-    tag_text = "（无行业标签）"
-    if tags and tags.hard_tags:
-        hard_str = "；".join(f"{h.system}: {h.value}" for h in tags.hard_tags)
-        tag_text = f"[行业] {hard_str}"
-    if tags and tags.financial_profile:
-        from schemas.tags import FINANCIAL_DIMENSIONS
-        fp_items = [
-            f"{FINANCIAL_DIMENSIONS[i]}={lv}"
-            for i, lv in enumerate(tags.financial_profile.levels)
-        ]
-        tag_text = f"{tag_text}\n[财务画像] {' | '.join(fp_items)}"
-
-    return {
-        "indicator": indicator,
-        "deviation": deviation_text,
-        "macro_facts": macro_text,
-        "industry_tags": tag_text,
-    }
+    return _llm_generate(
+        indicator=indicator_name,
+        actual_value=actual_value,
+        deviation=deviation_text,
+        business_desc=business_desc,
+        industry_tags=industry_text,
+        macro_facts=macro_text,
+    )
 
 
-def _extract_name(anomaly: Any) -> str:
-    """提取异常名称"""
+# ────────────────────────────────────────────
+# 从异常对象提取信息
+# ────────────────────────────────────────────
+
+def _extract_indicator_name(anomaly: Any) -> str:
+    """提取异常指标名称"""
     for attr in ["indicator", "check_name"]:
         name = getattr(anomaly, attr, None)
         if name:
@@ -106,133 +87,130 @@ def _extract_name(anomaly: Any) -> str:
     return "未知指标"
 
 
-def _format_deviation(obj: Any) -> str:
-    """格式化偏离度描述"""
-    if obj is None:
-        return "偏离度未知"
-    mad = getattr(obj, "mad_multiple", None)
-    actual = getattr(obj, "actual_value", None)
-    benchmark = getattr(obj, "benchmark_value", None)
+def _extract_actual_value(anomaly: Any) -> str:
+    """提取实际值描述"""
+    for attr in ["actual_value", "value"]:
+        v = getattr(anomaly, attr, None)
+        if v is not None:
+            return str(v)
+    return "未知"
 
+
+def _format_deviation(anomaly: Any) -> str:
+    """格式化偏离度描述"""
+    mad = getattr(anomaly, "mad_multiple", None)
     if mad is not None:
         severity = "极端" if mad >= 5.0 else "显著" if mad >= 2.0 else "轻微"
         parts = [f"偏离同行中位数 {mad:.1f} 倍 MAD（{severity}）"]
+        actual = getattr(anomaly, "actual_value", None)
         if actual is not None:
             parts.append(f"实际值={actual}")
         return "，".join(parts)
 
-    value = getattr(obj, "value", None)
-    threshold = getattr(obj, "threshold", None)
+    value = getattr(anomaly, "value", None)
+    threshold = getattr(anomaly, "threshold", None)
     if value is not None:
         return f"实际值={value}" + (f"，阈值={threshold}" if threshold else "")
     return "偏离度未知"
 
 
+def _format_industry_tags(tags: Optional[CompanyTags]) -> str:
+    """格式化行业标签"""
+    if not tags or not tags.hard_tags:
+        return "（无行业标签）"
+    hard_str = "；".join(f"{h.system}: {h.value}" for h in tags.hard_tags)
+    return hard_str
+
+
 # ────────────────────────────────────────────
-# LLM 生成路径
+# LLM 调用
 # ────────────────────────────────────────────
 
-def _llm_generate_hypotheses(context: dict) -> list[Hypothesis]:
-    """调用 LLM 生成假设"""
+def _llm_generate(
+    indicator: str,
+    actual_value: str,
+    deviation: str,
+    business_desc: str,
+    industry_tags: str,
+    macro_facts: str,
+) -> list[Hypothesis]:
+    """调用 LLM 推演假设并按多源交叉排序
+
+    知识源约束（路2 隔离规则）：
+    - 仅接收异常清单 + 行业标签 + 宏观事实 + 公司基本情况
+    - 不接收年报原文、不接收财务画像
+    """
     from llm.client import LLMClient
 
     client = LLMClient()
     response = client.chat(
         "d1_hypothesis",
         {
-            "indicator": context["indicator"],
-            "deviation": context["deviation"],
-            "macro_facts": context["macro_facts"],
-            "industry_tags": context["industry_tags"],
+            "indicator": indicator,
+            "actual_value": actual_value,
+            "deviation": deviation,
+            "business_desc": business_desc or "（无主营业务描述）",
+            "industry_tags": industry_tags,
+            "macro_facts": macro_facts,
         },
     )
 
     raw = response if isinstance(response, str) else str(response)
-    return _parse_llm_hypothesis_result(raw)
+    return _parse_result(raw)
 
 
-def _parse_llm_hypothesis_result(raw: str) -> list[Hypothesis]:
-    """解析 LLM 返回的假设列表"""
+# ────────────────────────────────────────────
+# 结果解析
+# ────────────────────────────────────────────
+
+def _parse_result(raw: str) -> list[Hypothesis]:
+    """解析 LLM 返回的 JSON，转换为 Hypothesis 列表"""
     try:
         data = json.loads(raw)
-        if not isinstance(data, list):
-            data = [data]
-        return [
-            Hypothesis(
-                hypothesis=d.get("hypothesis", ""),
-                reasoning=d.get("reasoning", d.get("logic", "")),
-                source=d.get("source", "LLM推演"),
-            )
-            for d in data[:4]  # 最多 4 条
-        ]
-    except (json.JSONDecodeError, TypeError, KeyError) as e:
-        logger.warning(f"解析 LLM 假设结果失败: {e}")
+    except json.JSONDecodeError:
+        logger.warning(f"LLM 返回非 JSON 格式，尝试提取 JSON 块: {raw[:100]}")
+        match = re.search(r'\{[\s\S]*\}', raw)
+        if not match:
+            logger.error(f"无法解析 LLM 输出: {raw[:200]}")
+            return []
+        data = json.loads(match.group(0))
+
+    explanations = data.get("explanations", []) if isinstance(data, dict) else data
+    if not isinstance(explanations, list):
         return []
 
+    results = []
+    for item in explanations:
+        if not isinstance(item, dict):
+            continue
+        hypothesis_text = item.get("explanation", "")
+        if not hypothesis_text:
+            continue
 
-# ────────────────────────────────────────────
-# 模板降级路径（无 LLM 时）
-# ────────────────────────────────────────────
+        rank = int(item.get("confidence_rank", 1))
+        sources = item.get("sources", [])
 
-def _template_hypotheses(
-    anomaly: Any,
-    macro_facts: list[str],
-    tags: Optional[CompanyTags],
-    deviation: Optional[Any],
-) -> list[Hypothesis]:
-    """无 LLM 时的模板化假设生成
+        # 从 sources 构建 reasoning 和 reasoning_source
+        reasoning_parts = []
+        source_labels = []
+        for s in sources:
+            stype = s.get("type", "")
+            detail = s.get("detail", "")
+            name = s.get("name", "")
+            source_str = f"{stype}" + (f"：{name}" if name else "") + (f"（{detail}）" if detail else "")
+            reasoning_parts.append(source_str)
+            source_labels.append(stype)
 
-    基于常见商业常识模板生成互斥假设。
-    """
-    indicator = _extract_name(anomaly)
+        reasoning = "；".join(reasoning_parts) if reasoning_parts else ""
+        source = "、".join(set(source_labels)) if source_labels else "外部推演"
 
-    # 通用假设模板
-    templates = {
-        "存货周转率": [
-            ("产品滞销，市场需求疲软", "偏离度高 → 周转慢 → 库存积压"),
-            ("战略性备货，预期原材料涨价", "提前囤货 → 库存增加 → 周转率下降"),
-            ("新产线投产，产能爬坡期库存增加", "扩产初期库存临时升高"),
-            ("会计政策变更，存货计价方法调整", "非经营因素导致数据波动"),
-        ],
-        "毛利率": [
-            ("原材料成本上涨，挤压毛利空间", "上游涨价 → 成本上升 → 毛利率下降"),
-            ("产品结构升级，高毛利产品占比提升", "产品组合变化 → 综合毛利率提升"),
-            ("行业价格战，以价换量", "竞争加剧 → 降价促销 → 毛利率下降"),
-            ("汇率波动影响出口毛利率", "人民币升值 → 出口产品毛利率下降"),
-        ],
-        "净现比": [
-            ("行业特性：重资产行业折旧大，看似有利润实则无现金", "折旧摊销不消耗现金 → 净现比低为行业常态"),
-            ("激进确认收入，应收账款大增", "提前确认收入 → 账面利润增加但现金未到账"),
-            ("大量备货导致经营现金流出", "存货大幅增加 → 现金流恶化"),
-            ("下游客户回款周期延长", "行业景气度下降 → 客户拖延付款"),
-        ],
-        "存贷双高": [
-            ("集团资金集中管理模式", "众多子公司 → 合并报表体现高存款，同时集团统借统还"),
-            ("财务造假：虚构货币资金", "大股东挪用 → 账面现金实际不存在"),
-            ("限制性资金占比高", "保证金/质押存单 → 名义现金多但实际不可动用"),
-            ("房地产/建筑行业特性", "项目公司独立融资 → 合并层面存贷双高属正常"),
-        ],
-        "母子资金分离度": [
-            ("子公司资金归集到集团财务公司", "正常集团管理模式 → 母公司资金较少"),
-            ("海外子公司受外汇管制", "资金无法自由汇回 → 合并层面资金虚高"),
-            ("大股东资金占用/关联交易", "通过子公司为大股东提供资金 → 造假嫌疑"),
-        ],
-    }
+        results.append(Hypothesis(
+            hypothesis=hypothesis_text,
+            reasoning=reasoning,
+            source=source,
+            confidence_rank=rank,
+        ))
 
-    # 默认模板
-    default = [
-        ("宏观因素导致的变化", "基于宏观事实推断"),
-        ("行业周期变化所致", "基于行业标签推断"),
-        ("公司自身经营策略调整", "内部因素导致的变化"),
-    ]
-
-    candidates = templates.get(indicator, default)
-
-    # 如果有关键词宏事实，调整第一条假设
-    if macro_facts:
-        candidates[0] = (f"受宏观因素影响：{macro_facts[0][:50]}...", "基于宏观事实")
-
-    return [
-        Hypothesis(hypothesis=h, reasoning=r, source="模板推演")
-        for h, r in candidates[:4]
-    ]
+    # 按 confidence_rank 升序排列（1 排最前）
+    results.sort(key=lambda x: x.confidence_rank)
+    return results

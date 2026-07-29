@@ -30,6 +30,7 @@ class Hypothesis(BaseModel):
     hypothesis: str                              # 假设内容
     reasoning: str                               # 推演逻辑
     source: str                                  # 依据来源（宏观事实/行业标签/偏差数据）
+    confidence_rank: int = 1                     # 置信度排序（1 = 最可信）
 
 
 class Explanation(BaseModel):
@@ -38,6 +39,7 @@ class Explanation(BaseModel):
     source_text: str                             # 原文引用
     page_number: int                             # 年报页码
     is_vague: bool = False                       # 是否含糊其辞
+    confidence_rank: int = 1                     # 置信度排序（1 = 最可信，基于显要程度）
 
 
 class DualPathResult(BaseModel):

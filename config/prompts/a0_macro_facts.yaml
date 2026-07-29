@@ -14,8 +14,6 @@
 # 模板变量：
 #   business_desc:      公司主营业务描述
 #   industry_tags:      A1 层输出的行业标签
-#   key_raw_materials:  核心原材料/上游依赖
-#   downstream_markets: 下游领域
 #   year:               年报年份
 #   search_results:     SerpAPI 返回的搜索结果原文
 #
@@ -63,8 +61,6 @@ messages:
     content: |
       公司主营业务：{{business_desc}}
       行业标签：{{industry_tags}}
-      核心原材料：{{key_raw_materials}}
-      下游领域：{{downstream_markets}}
       分析年份：{{year}}
 
       搜索结果：

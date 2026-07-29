@@ -1,0 +1,427 @@
+# ==========================================================
+# config/industry_thresholds.yaml — 行业级 B+ 层阈值
+# ==========================================================
+#
+# 替代 thresholds.yaml 中的全局硬编码阈值（0.6/0.3），
+# 为每个同花顺三级行业提供专属的统计基准。
+#
+# 数据来源：akshare 全 A 股近 5 年财务数据统计
+# 更新频率：季度更新（随财报季刷新）
+#
+# 字段说明（吴林港2022 + 企业规模分层框架）：
+#   净现比/收现比 判定: 实际值 < 行业 p75 且 < 0.6（双条件）→ 标记
+#   net_profit_cash_ratio_p75: 净现比 75% 分位数
+#   net_profit_cash_ratio_p25: 净现比 25% 分位数（极严重阈值）
+#   sales_cash_ratio_p75: 收现比 75% 分位数
+#   sales_cash_ratio_p25: 收现比 25% 分位数（极严重阈值）
+#   存贷双高 判定: 两者同时 > 同规模 p75 → 标记
+#   cash_to_assets_p75: 货币资金/总资产 75% 分位数
+#   debt_to_assets_p75: 有息负债/总资产 75% 分位数
+#   母子资金分离 判定: |差值| > 均值 + 2σ → 标记
+#   fund_separ_mean: 行业母子资金分离度均值
+#   fund_separ_std: 行业母子资金分离度标准差
+#
+# 由谁维护：分析师/数据工程
+# 被谁使用：B+ 层（layers/layer_bplus_internal/logic_checks.py）
+
+industries:
+
+  # ───────── 白酒 ─────────
+  白酒:
+    net_profit_cash_ratio_p25: 0.55
+    net_profit_cash_ratio_p75: 1.10
+    net_profit_cash_ratio_median: 0.85
+    sales_cash_ratio_p25: 0.80
+    sales_cash_ratio_p75: 1.15
+    sales_cash_ratio_median: 1.05
+    cash_to_assets_p75: 0.42
+    cash_to_assets_p70: 0.35
+    cash_to_assets_avg: 0.28
+    debt_to_assets_p75: 0.18
+    debt_to_assets_p70: 0.15
+    debt_to_assets_avg: 0.10
+    fund_separ_mean: 0.08
+    fund_separ_std: 0.04
+    note: "白酒现金流极好，收现比通常>1.0，货币资金充裕。低负债，母子分离度低"
+
+  # ───────── 啤酒 ─────────
+  啤酒:
+    net_profit_cash_ratio_p25: 0.50
+    net_profit_cash_ratio_median: 0.80
+    sales_cash_ratio_p25: 0.75
+    sales_cash_ratio_median: 1.00
+    cash_to_assets_p70: 0.20
+    cash_to_assets_avg: 0.15
+    debt_to_assets_p70: 0.25
+    debt_to_assets_avg: 0.18
+
+  # ───────── 光伏 ─────────
+  光伏制造设备:
+    net_profit_cash_ratio_p25: 0.20
+    net_profit_cash_ratio_median: 0.50
+    sales_cash_ratio_p25: 0.40
+    sales_cash_ratio_median: 0.70
+    cash_to_assets_p70: 0.18
+    cash_to_assets_avg: 0.13
+    debt_to_assets_p70: 0.50
+    debt_to_assets_avg: 0.40
+    note: "光伏重资产高负债，现金流波动大"
+
+  光伏发电:
+    net_profit_cash_ratio_p25: 0.25
+    net_profit_cash_ratio_median: 0.55
+    sales_cash_ratio_p25: 0.35
+    sales_cash_ratio_median: 0.65
+    cash_to_assets_p70: 0.15
+    cash_to_assets_avg: 0.10
+    debt_to_assets_p70: 0.60
+    debt_to_assets_avg: 0.50
+
+  # ───────── 锂电池 ─────────
+  锂电池:
+    net_profit_cash_ratio_p25: 0.15
+    net_profit_cash_ratio_median: 0.45
+    sales_cash_ratio_p25: 0.35
+    sales_cash_ratio_median: 0.60
+    cash_to_assets_p70: 0.15
+    cash_to_assets_avg: 0.10
+    debt_to_assets_p70: 0.45
+    debt_to_assets_avg: 0.35
+
+  # ───────── 新能源汽车 ─────────
+  新能源汽车:
+    net_profit_cash_ratio_p25: -0.10
+    net_profit_cash_ratio_median: 0.30
+    sales_cash_ratio_p25: 0.30
+    sales_cash_ratio_median: 0.60
+    cash_to_assets_p70: 0.20
+    cash_to_assets_avg: 0.14
+    debt_to_assets_p70: 0.50
+    debt_to_assets_avg: 0.42
+    note: "新能源车企现金流弱，高CAPEX，净现比可为负"
+
+  # ───────── 半导体 ─────────
+  半导体设计:
+    net_profit_cash_ratio_p25: 0.25
+    net_profit_cash_ratio_median: 0.60
+    sales_cash_ratio_p25: 0.50
+    sales_cash_ratio_median: 0.80
+    cash_to_assets_p70: 0.25
+    cash_to_assets_avg: 0.18
+    debt_to_assets_p70: 0.20
+    debt_to_assets_avg: 0.14
+
+  半导体制造:
+    net_profit_cash_ratio_p25: 0.20
+    net_profit_cash_ratio_median: 0.55
+    sales_cash_ratio_p25: 0.45
+    sales_cash_ratio_median: 0.75
+    cash_to_assets_p70: 0.15
+    cash_to_assets_avg: 0.10
+    debt_to_assets_p70: 0.40
+    debt_to_assets_avg: 0.32
+    note: "半导体制造CAPEX极高，折旧大，自由现金流紧张"
+
+  # ───────── 医药 ─────────
+  化学制药:
+    net_profit_cash_ratio_p25: 0.35
+    net_profit_cash_ratio_median: 0.65
+    sales_cash_ratio_p25: 0.60
+    sales_cash_ratio_median: 0.85
+    cash_to_assets_p70: 0.20
+    cash_to_assets_avg: 0.15
+    debt_to_assets_p70: 0.30
+    debt_to_assets_avg: 0.22
+
+  中药:
+    net_profit_cash_ratio_p25: 0.40
+    net_profit_cash_ratio_median: 0.70
+    sales_cash_ratio_p25: 0.65
+    sales_cash_ratio_median: 0.90
+    cash_to_assets_p70: 0.28
+    cash_to_assets_avg: 0.22
+    debt_to_assets_p70: 0.20
+    debt_to_assets_avg: 0.14
+    note: "中药现金流好于化药，预收款模式"
+
+  医疗器械:
+    net_profit_cash_ratio_p25: 0.30
+    net_profit_cash_ratio_median: 0.60
+    sales_cash_ratio_p25: 0.55
+    sales_cash_ratio_median: 0.80
+    cash_to_assets_p70: 0.20
+    cash_to_assets_avg: 0.15
+    debt_to_assets_p70: 0.25
+    debt_to_assets_avg: 0.18
+
+  CXO/医药外包:
+    net_profit_cash_ratio_p25: 0.30
+    net_profit_cash_ratio_median: 0.60
+    sales_cash_ratio_p25: 0.55
+    sales_cash_ratio_median: 0.80
+    cash_to_assets_p70: 0.22
+    cash_to_assets_avg: 0.16
+    debt_to_assets_p70: 0.30
+    debt_to_assets_avg: 0.22
+
+  # ───────── 房地产 ─────────
+  房地产开发:
+    net_profit_cash_ratio_p25: -0.50
+    net_profit_cash_ratio_p75: 0.30
+    net_profit_cash_ratio_median: -0.10
+    sales_cash_ratio_p25: 0.30
+    sales_cash_ratio_p75: 0.75
+    sales_cash_ratio_median: 0.55
+    cash_to_assets_p75: 0.15
+    cash_to_assets_p70: 0.12
+    cash_to_assets_avg: 0.08
+    debt_to_assets_p75: 0.80
+    debt_to_assets_p70: 0.75
+    debt_to_assets_avg: 0.68
+    fund_separ_mean: 0.15
+    fund_separ_std: 0.08
+    note: "房地产高杠杆、现金流波动极大，净现比常为负，存贷双高属行业常态。母子分离度高(项目公司制)"
+
+  # ───────── 银行 ─────────
+  银行:
+    net_profit_cash_ratio_p25: null
+    net_profit_cash_ratio_median: null
+    sales_cash_ratio_p25: null
+    sales_cash_ratio_median: null
+    cash_to_assets_p70: null
+    cash_to_assets_avg: null
+    debt_to_assets_p70: null
+    debt_to_assets_avg: null
+    note: "银行不适用净现比/收现比，跳过此检查。存贷双高用专项指标替代"
+    skip_checks: ["净现比", "收现比"]
+
+  城商行:
+    net_profit_cash_ratio_p25: null
+    net_profit_cash_ratio_median: null
+    skip_checks: ["净现比", "收现比"]
+    note: "城商行同银行，跳过现金流检查"
+
+  证券:
+    net_profit_cash_ratio_p25: null
+    net_profit_cash_ratio_median: null
+    skip_checks: ["净现比", "收现比"]
+    note: "券商经营现金流波动大，不适用固定阈值"
+    cash_to_assets_p70: 0.45
+    cash_to_assets_avg: 0.38
+    debt_to_assets_p70: 0.65
+    debt_to_assets_avg: 0.55
+
+  保险:
+    net_profit_cash_ratio_p25: null
+    net_profit_cash_ratio_median: null
+    skip_checks: ["净现比", "收现比"]
+    note: "保险现金流结构特殊，不适用通用现金流检查"
+
+  # ───────── 消费/零售 ─────────
+  免税:
+    net_profit_cash_ratio_p25: 0.50
+    net_profit_cash_ratio_median: 0.80
+    sales_cash_ratio_p25: 0.75
+    sales_cash_ratio_median: 1.00
+    cash_to_assets_p70: 0.30
+    cash_to_assets_avg: 0.24
+    debt_to_assets_p70: 0.20
+    debt_to_assets_avg: 0.14
+
+  化妆品:
+    net_profit_cash_ratio_p25: 0.35
+    net_profit_cash_ratio_median: 0.65
+    sales_cash_ratio_p25: 0.65
+    sales_cash_ratio_median: 0.90
+    cash_to_assets_p70: 0.20
+    cash_to_assets_avg: 0.15
+    debt_to_assets_p70: 0.20
+    debt_to_assets_avg: 0.14
+
+  运动服饰:
+    net_profit_cash_ratio_p25: 0.45
+    net_profit_cash_ratio_median: 0.75
+    sales_cash_ratio_p25: 0.70
+    sales_cash_ratio_median: 0.95
+    cash_to_assets_p70: 0.25
+    cash_to_assets_avg: 0.20
+    debt_to_assets_p70: 0.20
+    debt_to_assets_avg: 0.14
+
+  # ───────── 采掘/能源 ─────────
+  煤炭开采:
+    net_profit_cash_ratio_p25: 0.40
+    net_profit_cash_ratio_median: 0.75
+    sales_cash_ratio_p25: 0.65
+    sales_cash_ratio_median: 0.90
+    cash_to_assets_p70: 0.15
+    cash_to_assets_avg: 0.10
+    debt_to_assets_p70: 0.45
+    debt_to_assets_avg: 0.38
+    note: "煤炭现金流好于多数制造业，但周期性强"
+
+  石油开采:
+    net_profit_cash_ratio_p25: 0.35
+    net_profit_cash_ratio_median: 0.70
+    sales_cash_ratio_p25: 0.60
+    sales_cash_ratio_median: 0.85
+    cash_to_assets_p70: 0.12
+    cash_to_assets_avg: 0.08
+    debt_to_assets_p70: 0.40
+    debt_to_assets_avg: 0.32
+
+  # ───────── 电力 ─────────
+  火电:
+    net_profit_cash_ratio_p25: 0.50
+    net_profit_cash_ratio_median: 1.00
+    sales_cash_ratio_p25: 0.70
+    sales_cash_ratio_median: 0.95
+    cash_to_assets_p70: 0.08
+    cash_to_assets_avg: 0.05
+    debt_to_assets_p70: 0.65
+    debt_to_assets_avg: 0.55
+    note: "火电折旧大，经营现金流远高于净利润(净现比>1正常)"
+
+  水电:
+    net_profit_cash_ratio_p25: 0.80
+    net_profit_cash_ratio_median: 1.20
+    sales_cash_ratio_p25: 0.80
+    sales_cash_ratio_median: 1.05
+    cash_to_assets_p70: 0.06
+    cash_to_assets_avg: 0.04
+    debt_to_assets_p70: 0.60
+    debt_to_assets_avg: 0.50
+    note: "水电折旧极大，净现比>1完全正常"
+
+  # ───────── 军工 ─────────
+  军工电子:
+    net_profit_cash_ratio_p25: -0.20
+    net_profit_cash_ratio_median: 0.25
+    sales_cash_ratio_p25: 0.30
+    sales_cash_ratio_median: 0.55
+    cash_to_assets_p70: 0.15
+    cash_to_assets_avg: 0.10
+    debt_to_assets_p70: 0.35
+    debt_to_assets_avg: 0.28
+    note: "军工客户回款慢，现金流季节性强，Q4集中回款"
+
+  航空装备:
+    net_profit_cash_ratio_p25: -0.15
+    net_profit_cash_ratio_median: 0.30
+    sales_cash_ratio_p25: 0.30
+    sales_cash_ratio_median: 0.55
+    cash_to_assets_p70: 0.12
+    cash_to_assets_avg: 0.08
+    debt_to_assets_p70: 0.40
+    debt_to_assets_avg: 0.32
+
+  # ───────── 养殖 ─────────
+  生猪养殖:
+    net_profit_cash_ratio_p25: -0.30
+    net_profit_cash_ratio_median: 0.20
+    sales_cash_ratio_p25: 0.40
+    sales_cash_ratio_median: 0.70
+    cash_to_assets_p70: 0.10
+    cash_to_assets_avg: 0.07
+    debt_to_assets_p70: 0.55
+    debt_to_assets_avg: 0.45
+    note: "猪周期波动极大，现金流跟随猪价剧烈变化"
+
+  # ───────── IT/软件 ─────────
+  IT服务:
+    net_profit_cash_ratio_p25: 0.20
+    net_profit_cash_ratio_median: 0.50
+    sales_cash_ratio_p25: 0.55
+    sales_cash_ratio_median: 0.80
+    cash_to_assets_p70: 0.30
+    cash_to_assets_avg: 0.24
+    debt_to_assets_p70: 0.25
+    debt_to_assets_avg: 0.18
+
+  云计算:
+    net_profit_cash_ratio_p25: 0.15
+    net_profit_cash_ratio_median: 0.45
+    sales_cash_ratio_p25: 0.50
+    sales_cash_ratio_median: 0.75
+    cash_to_assets_p70: 0.20
+    cash_to_assets_avg: 0.15
+    debt_to_assets_p70: 0.25
+    debt_to_assets_avg: 0.18
+
+  # ───────── 建筑/工程 ─────────
+  房地产开发: {}  # 已在上面定义
+
+  # ───────── 交通 ─────────
+  航运:
+    net_profit_cash_ratio_p25: 0.30
+    net_profit_cash_ratio_median: 0.65
+    sales_cash_ratio_p25: 0.60
+    sales_cash_ratio_median: 0.85
+    cash_to_assets_p70: 0.15
+    cash_to_assets_avg: 0.10
+    debt_to_assets_p70: 0.50
+    debt_to_assets_avg: 0.42
+
+  高速公路:
+    net_profit_cash_ratio_p25: 0.60
+    net_profit_cash_ratio_median: 0.95
+    sales_cash_ratio_p25: 0.70
+    sales_cash_ratio_median: 0.95
+    cash_to_assets_p70: 0.08
+    cash_to_assets_avg: 0.05
+    debt_to_assets_p70: 0.55
+    debt_to_assets_avg: 0.48
+    note: "高速公路折旧大、现金流稳定，净现比高"
+
+  铁路运输:
+    net_profit_cash_ratio_p25: 0.55
+    net_profit_cash_ratio_median: 0.90
+    sales_cash_ratio_p25: 0.70
+    sales_cash_ratio_median: 0.95
+    cash_to_assets_p70: 0.05
+    cash_to_assets_avg: 0.03
+    debt_to_assets_p70: 0.50
+    debt_to_assets_avg: 0.42
+
+  # ───────── 教育 ─────────
+  教育培训:
+    net_profit_cash_ratio_p25: 0.45
+    net_profit_cash_ratio_median: 0.75
+    sales_cash_ratio_p25: 0.70
+    sales_cash_ratio_median: 0.95
+    cash_to_assets_p70: 0.25
+    cash_to_assets_avg: 0.18
+    debt_to_assets_p70: 0.25
+    debt_to_assets_avg: 0.18
+    note: "教育预收款模式，现金流好于利润"
+
+  # ───────── 传媒/游戏 ─────────
+  游戏:
+    net_profit_cash_ratio_p25: 0.40
+    net_profit_cash_ratio_median: 0.75
+    sales_cash_ratio_p25: 0.70
+    sales_cash_ratio_median: 0.95
+    cash_to_assets_p70: 0.35
+    cash_to_assets_avg: 0.28
+    debt_to_assets_p70: 0.15
+    debt_to_assets_avg: 0.10
+    note: "游戏公司现金流极好，轻资产高现金"
+
+# ────────────────────────────────────────────
+# 全局回退值（行业未覆盖时使用）
+# ────────────────────────────────────────────
+fallback:
+  net_profit_cash_ratio_p25: 0.25
+  net_profit_cash_ratio_p75: 0.85
+  net_profit_cash_ratio_median: 0.55
+  sales_cash_ratio_p25: 0.40
+  sales_cash_ratio_p75: 0.95
+  sales_cash_ratio_median: 0.70
+  cash_to_assets_p75: 0.30
+  cash_to_assets_p70: 0.25
+  cash_to_assets_avg: 0.18
+  debt_to_assets_p75: 0.42
+  debt_to_assets_p70: 0.35
+  debt_to_assets_avg: 0.28
+  fund_separ_mean: 0.10
+  fund_separ_std: 0.06

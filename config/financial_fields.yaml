@@ -29,6 +29,17 @@ fields:
     type: "profit_loss"
     description: "营业收入（总收入）"
 
+  Revenue_Prior_Year:
+    chinese_variants:
+      - "上期营业收入"
+      - "上年营业收入"
+      - "去年同期营业收入"
+      - "前期营业收入"
+    english_variants:
+      - "Prior Year Revenue"
+    type: "profit_loss"
+    description: "上期营业收入（用于计算同比增速）"
+
   Cost_Revenue:
     chinese_variants:
       - "营业成本"
@@ -51,6 +62,16 @@ fields:
       - "扣非净利润"
     type: "profit_loss"
     description: "净利润"
+
+  Operating_Profit:
+    chinese_variants:
+      - "营业利润"
+      - "经营利润"
+    english_variants:
+      - "Operating Profit"
+      - "Operating Income"
+    type: "profit_loss"
+    description: "营业利润（不受非经常损益干扰）"
 
   Total_Assets:
     chinese_variants:

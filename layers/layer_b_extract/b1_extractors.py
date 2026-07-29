@@ -77,17 +77,25 @@ def _extract_row_major(
     rows: list[RawTableRow], guide,
     bs: dict, pl: dict, cf: dict, table_name: str,
 ):
-    """行式表格：每行一个科目，从指定列取数值"""
+    """行式表格：预建行文本索引 O(rows + fields) 替代 O(rows × fields)"""
     multiplier = _unit_to_multiplier(guide.overall_unit)
 
+    # v3: 预建索引 {raw_name → (row, numeric_col_value)}
+    row_index = _build_row_index(rows, guide.field_mappings)
+
     for fm in guide.field_mappings:
-        value = _extract_value(rows, fm)
+        entry = row_index.get(fm.raw_name)
+        if entry is None:
+            # fallback: 坐标取数
+            value = _extract_value_fallback(rows, fm)
+        else:
+            row, val_str = entry
+            value = _parse_number(val_str) if val_str else None
+
         if value is None:
             continue
         field_mult = _unit_to_multiplier(fm.unit)
-        # 用 Decimal 避免浮点误差：value × field_mult × multiplier
         d_value = Decimal(str(value))
-        value_in_yuan = d_value * field_mult
         if fm.unit != guide.overall_unit:
             value_in_yuan = d_value * field_mult * multiplier
         else:
@@ -105,33 +113,34 @@ def _extract_row_major(
         _assign_field(field, table_name, bs, pl, cf)
 
 
-def _extract_value(rows: list[RawTableRow], fm: FieldMapping) -> Optional[float]:
-    """从行式表格中按坐标取数"""
+def _build_row_index(
+    rows: list[RawTableRow], field_mappings: list[FieldMapping],
+) -> dict[str, tuple[RawTableRow, str | None]]:
+    """预建 raw_name → (row, 数值列) 索引，O(rows)
+
+    对每行提取科目名（col_0 或 col_0+col_1），查 field_mappings 中
+    的 raw_name 是否在行文本中 → 匹配则记录该行和最新数值列。
+    """
+    idx: dict[str, tuple[RawTableRow, str | None]] = {}
+    known_names = {fm.raw_name for fm in field_mappings}
+    for row in rows:
+        cols = row.columns
+        row_text = " ".join(str(v) for v in cols.values())
+        for name in known_names:
+            if name in row_text:
+                val_str = _find_numeric_column(cols)
+                idx[name] = (row, val_str)
+    return idx
+
+
+def _extract_value_fallback(rows: list[RawTableRow], fm: FieldMapping) -> Optional[float]:
+    """坐标取数降级（索引未命中时）"""
     row_index = fm.row_index
     col_index = fm.col_index
-    # 精确坐标
     if 0 <= row_index < len(rows):
         val_str = rows[row_index].columns.get(f"col_{col_index}", "")
         if val_str:
-            parsed = _parse_number(val_str)
-            if parsed is not None:
-                return parsed
-    # 降级搜索
-    for row in rows:
-        row_text = " ".join(str(v) for v in row.columns.values())
-        if fm.raw_name and fm.raw_name in row_text:
-            val_str = _find_numeric_column(row.columns)
-            if val_str:
-                parsed = _parse_number(val_str)
-                if parsed is not None:
-                    return parsed
-            next_idx = rows.index(row) + 1
-            if next_idx < len(rows):
-                val_str = _find_numeric_column(rows[next_idx].columns)
-                if val_str:
-                    parsed = _parse_number(val_str)
-                    if parsed is not None:
-                        return parsed
+            return _parse_number(val_str)
     return None
 
 

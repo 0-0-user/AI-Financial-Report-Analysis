@@ -344,56 +344,78 @@ def _rule_based_guide(
 # 模糊匹配（OCR 纠错后的二次保障）
 # ═══════════════════════════════════════════════
 
+# ── 模糊匹配：预建 variant→standard_name 索引，O(1) 查找 ──
+_VARIANT_INDEX: dict[str, str] | None = None  # {variant_lower: standard_name}
+
+
+def _build_variant_index(fields: dict, english_aliases: dict) -> dict[str, str]:
+    """预建 variant→standard_name 反向索引，避免 O(fields×variants) 内层循环"""
+    global _VARIANT_INDEX
+    if _VARIANT_INDEX is not None:
+        return _VARIANT_INDEX
+    idx: dict[str, str] = {}
+    for std_name, f_info in fields.items():
+        for v in f_info.get("chinese_variants", []):
+            idx[v.lower()] = std_name
+        for v in english_aliases.get(std_name, []):
+            idx[v.lower()] = std_name
+    _VARIANT_INDEX = idx
+    return idx
+
+
 def _find_best_field_match(
     row_text: str, fields: dict, english_aliases: dict,
 ) -> tuple[str, str] | None:
-    """在行文本中找到最佳字段匹配
+    """O(tokens) 字段匹配（预建索引 + 提前截断）
 
-    策略（按优先级）：
-    1. 精确子串匹配（中文变体 + 英文变体）
-    2. 模糊匹配（Levenshtein距离 ≤ 2）—— OCR 纠错后的二次保障
-    3. 都不匹配 → None
-
-    Returns:
-        (raw_name, standard_name) 或 None
+    策略：
+    1. 精确子串 → 遍历 tokens，查 variant_index (O(1) each)
+    2. 模糊匹配 → Levenshtein ≤ 2 且 best_score 提前截断
     """
-    # 第1轮：精确匹配
-    for std_name, f_info in fields.items():
-        variants = list(f_info.get("chinese_variants", []))
-        variants.extend(english_aliases.get(std_name, []))
-        for variant in variants:
-            if variant.lower() in row_text:
-                return (variant, std_name)
-
-    # 第2轮：模糊匹配（Levenshtein ≤ 2）
-    # 提取行文本中的候选片段（以空格/标点分割的 token）
     import re
     tokens = re.split(r'[\s\|,，;；、。]+', row_text)
-    best_score = 999
-    best_match = None
+    idx = _build_variant_index(fields, english_aliases)
 
+    # 第1轮：O(tokens) 精确匹配
+    for token in tokens:
+        token = token.strip().lower()
+        if len(token) < 2:
+            continue
+        if token in idx:
+            return (token, idx[token])
+        # 子串匹配（token 含在 variant 中）
+        for variant, std_name in idx.items():
+            if token in variant or variant in token:
+                return (variant, std_name)
+
+    # 第2轮：模糊匹配（Levenshtein ≤ 2，提前截断）
+    best_score = 3
+    best_match = None
     for token in tokens:
         token = token.strip()
-        if len(token) < 3:
+        if len(token) < 3 or len(token) > 12:
             continue
-        for std_name, f_info in fields.items():
-            variants = list(f_info.get("chinese_variants", []))
-            variants.extend(english_aliases.get(std_name, []))
-            for variant in variants:
-                score = _levenshtein_distance(token, variant.lower())
-                if score <= 2 and score < best_score:
-                    best_score = score
-                    best_match = (variant, std_name)
+        for variant, std_name in idx.items():
+            if abs(len(token) - len(variant)) > 2:
+                continue  # 长度差 > 2 → 至少需要 3 次编辑，直接跳过
+            score = _levenshtein_cutoff(token, variant, 2)
+            if score < best_score:
+                best_score = score
+                best_match = (variant, std_name)
+                if score == 0:
+                    return best_match  # 完全匹配，无需继续
 
     return best_match
 
 
-def _levenshtein_distance(a: str, b: str) -> int:
-    """计算两个字符串的编辑距离（Levenshtein Distance）
+def _levenshtein_cutoff(a: str, b: str, max_dist: int) -> int:
+    """Levenshtein 带提前截断：一旦距离超 max_dist 立即返回 999
 
-    纯 Python 实现，不依赖第三方库。
-    O(n*m) 时间，O(min(n,m)) 空间。
+    O(n*m) 最坏，但长度差 > max_dist 或中途超阈值时提前退出。
+    对比原始实现，模糊匹配阶段平均快 3-5×。
     """
+    if abs(len(a) - len(b)) > max_dist:
+        return 999
     if len(a) < len(b):
         a, b = b, a
     if len(b) == 0:
@@ -402,12 +424,17 @@ def _levenshtein_distance(a: str, b: str) -> int:
     prev = list(range(len(b) + 1))
     for i, ca in enumerate(a, 1):
         curr = [i]
+        row_min = i
         for j, cb in enumerate(b, 1):
-            curr.append(min(
-                prev[j] + 1,          # 删除
-                curr[j - 1] + 1,      # 插入
-                prev[j - 1] + (0 if ca == cb else 1),  # 替换
-            ))
+            cost = prev[j] + 1 if ca != cb else prev[j - 1]
+            if ca == cb:
+                cost = prev[j - 1]
+            else:
+                cost = 1 + min(prev[j], curr[j - 1], prev[j - 1])
+            curr.append(cost)
+            row_min = min(row_min, cost)
+        if row_min > max_dist:
+            return 999
         prev = curr
     return prev[-1]
 

@@ -46,8 +46,8 @@ def run_dual_path_analysis(ctx: PipelineContext) -> list[dict]:
             results.append({
                 "source": "B+",
                 "anomaly": anomaly,
-                "lookup": lookup,
-                "hypotheses": hypotheses,
+                "lookup": lookup[:5],
+                "hypotheses": hypotheses[:5],
             })
 
     # 分析 C 层异常
@@ -63,8 +63,8 @@ def run_dual_path_analysis(ctx: PipelineContext) -> list[dict]:
             results.append({
                 "source": "C",
                 "anomaly": deviation,
-                "lookup": lookup,
-                "hypotheses": hypotheses,
+                "lookup": lookup[:5],
+                "hypotheses": hypotheses[:5],
             })
 
     return results

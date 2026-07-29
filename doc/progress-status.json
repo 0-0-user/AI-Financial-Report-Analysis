@@ -71,15 +71,16 @@
         "d1_dual_path.py": "✅ 编排层，提取 business_desc 传给路2",
         "d1_lookup_notes.py": "✅ 路1 重写：纯搬运，全量原文不发散，显要程度排序，无降级",
         "d1_hypothesis.py": "✅ 路2 重写：多源交叉排序，移除 financial_profile，无降级",
-        "d2_probability.py": "✅ 综合双路径结果分配概率"
+        "d2_probability.py": "✅ D-S 证据理论合成（Dempster-Shafer）"
       },
       "v5.1_changes": [
         "路1 知识源仅限 raw_doc + 异常清单",
         "路2 移除 financial_profile，新增 business_desc",
         "两路都不做降级：LLM 失败 → 全流程中断",
-        "统一 JSON 输出模板 + confidence_rank 排序"
+        "统一 JSON 输出模板 + confidence_rank 排序",
+        "两路输出上限 5 条 (lookups[:5] / hypotheses[:5])"
       ],
-      "tests": "✅ test_d1_reasoning.py 26 tests passed"
+      "tests": "✅ test_d1_reasoning.py 26 tests + test_d2_reasoning.py 32 tests passed"
     },
     "layer_e_output": {
       "status": "✅ 代码已实现，有单元测试",
@@ -121,29 +122,30 @@
       "b0_semantic_guide": "B0: 识别报表表头/字段映射",
       "d1_lookup_notes": "⚠️ v5.1 重写：纯搬运+显要程度排序+严格禁令",
       "d1_hypothesis": "⚠️ v5.1 重写：多源交叉排序+移除财务画像",
-      "d2_probability": "D2: 综合双路径结果分配概率",
+      "d2_merge_conflict": "✨ D2 (新): D-S 语义合并+冲突检测",
       "e2_report": "E2: 生成报告中的多空逻辑栈文本"
     },
     "removed": ["industry_tags.yaml 中 financial_profile 阈值节"]
   },
 
   "tests": {
-    "total": 51,
-    "passed": 51,
+    "total": 83,
+    "passed": 83,
     "failed": 0,
     "coverage": {
       "schemas": "Pydantic 模型系列化",
       "llm": "PromptLoader 渲染、ResponseParser 解析",
       "pipeline": "Orchestrator 调度、StepRegistry 注册、集成测试",
-      "layers": "A2 余弦匹配、B1 校验逻辑、C层MAD、D1 双路径隔离、E1评分逻辑"
+      "layers": "A2 余弦匹配、B1 校验逻辑、C层MAD、D1 双路径隔离、D2 D-S证据理论、E1评分逻辑"
     },
     "v5.1_additions": [
-      "test_d1_reasoning.py: 26 个 D1 隔离测试"
+      "test_d1_reasoning.py: 26 个 D1 隔离测试",
+      "test_d2_reasoning.py: 32 个 D2 D-S 证据理论测试"
     ],
     "gaps": [
       "无 layer_0 单元测试（需 pdfplumber + 实际 PDF）",
       "无 layer_bplus 测试",
-      "无 D2 全链路集成测试（需 LLM API key）"
+      "D2 全链路集成测试需 LLM API key（D-S 数学部分已覆盖 32 tests）"
     ]
   },
 
@@ -161,7 +163,11 @@
     "B+: calc_severity() 行业感知升级",
     "第0层: text_corrector.py OCR 纠错+编译正则 O(n)",
     "financial_fields.yaml: 新增 Revenue_Prior_Year / Operating_Profit",
-    "测试: 26 → 51 tests 全通过"
+    "D2: 废弃 LLM 概率分配，改用 D-S 证据理论（Dempster-Shafer）",
+    "D2: 语义合并+冲突检测（轻量 LLM）+ 纯代码 Dempster 合成",
+    "D1: 两路输出上限 5 条",
+    "schemas: ProbabilityAssignment 新增 ds_metadata 字段",
+    "测试: 51 → 83 tests 全通过"
   ],
 
   "next_steps_by_priority": [

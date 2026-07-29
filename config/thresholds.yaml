@@ -37,3 +37,16 @@ bplus:
 c_layer:
   mad_threshold: 2.0
   extreme_threshold: 5.0
+
+d2_layer:
+  # 路1 uncertainty（年报未提及的剩余质量）
+  epsilon_1: 0.35
+  # 路2 uncertainty（外部推演不确定的剩余质量）
+  epsilon_2: 0.30
+  # 路1 k=2 时的主要/次要比例
+  path1_split_primary: 0.70
+  path1_split_secondary: 0.30
+  # 路2 保留的假设数量上限
+  path2_top_n: 5
+  # 严重冲突 K 值阈值（超过此值标注 severe_conflict）
+  conflict_threshold: 0.60

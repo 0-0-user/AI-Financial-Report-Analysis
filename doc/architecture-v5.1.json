@@ -92,10 +92,16 @@
         "error_handling": "不做降级，异常传播中断全流程"
       },
       {
-        "name": "D2层：概率分配",
+        "name": "D2层：D-S 证据理论概率分配",
         "files": ["d2_probability.py"],
-        "v5.1_changes": [],
-        "output": "list[ProbabilityAssignment]"
+        "v5.1_changes": [
+          "废弃旧 LLM 概率分配，改用 D-S 证据理论（Dempster-Shafer）",
+          "LLM 仅做语义合并+冲突检测，mass 构建和合成全代码计算",
+          "ε₁=0.35（路1 uncertainty）, ε₂=0.30（路2 uncertainty）",
+          "Dempster 合成后 pignistic 转概率，保留 ds_metadata 元数据",
+          "K > 0.6 标注严重冲突但不中断"
+        ],
+        "output": "list[ProbabilityAssignment]（含 ds_metadata）"
       },
       {
         "name": "E1层：综合置信度打分",
@@ -113,10 +119,10 @@
   "pipeline_order": ["layer_0", "layer_a", "layer_b", "layer_bplus", "layer_c", "layer_d", "layer_e"],
   "prompt_templates": 7,
   "tests": {
-    "total": 51,
-    "passed": 51,
+    "total": 83,
+    "passed": 83,
     "failed": 0,
-    "gaps": ["无 layer_0 单元测试", "无 layer_bplus 测试", "无 D2 集成测试（需 API key）"]
+    "gaps": ["无 layer_0 单元测试", "无 layer_bplus 测试", "D2 全链路集成测试需 API key（D-S 数学已 32 tests）"]
   },
   "v5.1_changelog": [
     "A2: 离散等级 → 连续值稳健标准化 (x-median)/IQR",
@@ -124,6 +130,7 @@
     "tags.py: FinancialProfile.levels → values（连续值），移除 to_readable_levels",
     "industry_tags.yaml: 删除 financial_profile 阈值节",
     "D1 双路径: 严格隔离重构（路1纯搬运+路2无财务画像+无降级+排序规则）",
+    "D1: 两路输出上限 5 条",
     "B0: 横纵双向+多级嵌套+英文+金融科目，v3 预建变体索引",
     "B1: 列式表格+交叉验证+Decimal，v3 预建行文本索引",
     "B+: 三步框架重构（数据异常+经营行为+内控质量）+ 6分制风险等级",
@@ -132,7 +139,11 @@
     "B+: calc_severity() 升级为行业感知（industry-aware）",
     "第0层: text_corrector.py 新增 OCR 文本纠错，编译正则 O(n)",
     "financial_fields.yaml: 新增 Revenue_Prior_Year / Operating_Profit",
-    "测试: 26 → 51 tests 全通过"
+    "D2: 废弃 LLM 概率分配，改用 D-S 证据理论（Dempster-Shafer）",
+    "D2: ε₁=0.35（路1）, ε₂=0.30（路2）, consensus_weight, Dempster 合成 + pignistic 转概率",
+    "D2: 新增 config/prompts/d2_merge_conflict.yaml",
+    "schemas: ProbabilityAssignment 新增 ds_metadata 字段",
+    "测试: 51 → 83 tests 全通过（新增 32 个 D2 D-S 测试）"
   ],
   "key_technical_decisions": [
     "PDF 解析：仅 pdfplumber，配合 OCR 文本纠错",
@@ -144,6 +155,8 @@
     "B+ 阈值：行业分位数（28个行业 p25/p75）+ 企业规模修正",
     "D1 隔离：路1只看原文不推测，路2只看外部+常识不碰原文",
     "D1 错误：LLM 失败不做降级，异常传播中断全流程",
+    "D2 概率：D-S 证据理论替代 LLM 概率分配，Dempster 合成+冲突显式建模",
+    "D2 参数：ε₁=0.35（路1 uncertainty）, ε₂=0.30（路2 uncertainty）, K阈值=0.6",
     "评分公式：100 - (C层扣分 + B+层扣分)，偏离度放大"
   ],
   "dependencies": {

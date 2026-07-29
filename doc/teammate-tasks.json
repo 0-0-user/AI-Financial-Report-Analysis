@@ -70,16 +70,19 @@
     "tests": "51 tests 全部通过（v5.0: 26 → v5.1: 51）"
   },
 
-  "二、你需要实现的剩余层": {
-    "执行顺序": "layer_0 → layer_b → layer_bplus → layer_d（但 B+ 已实现，剩余 D2）",
-    "注意": "A/B/B+/D1/C/E 全部已实现。你只需要实现 D2 概率分配。",
+  "二、已完成": {
+    "执行顺序": "layer_0 → layer_a → layer_b → layer_bplus → layer_c → layer_d → layer_e",
+    "所有层": "A/B/B+/C/D1/D2/E 全部已实现（D2 为 D-S 证据理论）",
     "D2_概率分配": {
+      "算法": "D-S 证据理论（Dempster-Shafer）",
       "函数": "d2_probability.run_probability_allocation()",
-      "输入": "双路径结果 + macro_facts + tags",
-      "流程": "调用 prompt d2_probability → LLM 综合两路结果分配概率",
-      "输出": "list[ProbabilityAssignment]",
-      "依赖": "LLMClient, config/prompts/d2_probability.yaml",
-      "注意": "D1 输出与 v5.0 兼容：每个异常含 anomaly + lookup（list[Explanation]）+ hypotheses（list[Hypothesis]）"
+      "输入": "双路径结果 + macro_facts + tags（后两者保留兼容）",
+      "流程": "LLM 语义合并+冲突检测（轻量）→ 代码 Dempster 合成 → Pignistic 转概率",
+      "输出": "list[ProbabilityAssignment]（含 ds_metadata）",
+      "prompt": "config/prompts/d2_merge_conflict.yaml（已废弃旧 d2_probability.yaml）",
+      "参数": "ε₁=0.35, ε₂=0.30, K阈值=0.6, 路1 73开, 路2 top5+consensus_weight",
+      "单元测试": "32 tests（纯数学，无 LLM 调用）",
+      "注意": "probabilities 字段兼容 E 层。新增 ds_metadata 存储 D-S 元数据"
     }
   },
 
@@ -88,6 +91,6 @@
     "LLM 调用": "client.chat(\"prompt_name\", {\"var\": \"value\"})",
     "prompt 文件": "config/prompts/ 下 7 个 yaml 文件",
     "配置文件": ["config/weights.yaml", "config/thresholds.yaml", "config/financial_fields.yaml", "config/industry_thresholds.yaml"],
-    "跑测试": "pytest -v（当前 51 passed）"
+    "跑测试": "pytest -v（当前 83 passed）"
   }
 }

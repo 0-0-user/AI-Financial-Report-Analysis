@@ -89,9 +89,14 @@
 
 - LLM 不可用时无模板降级（v5.1 删除 `_template_hypotheses` / `_rule_based_lookup`）
 
-#### D2：概率分配
-- 综合两路结果：路1有明确解释+路2无冲突 → 原文归因 > 60%；路1空 → 路2为主；冲突 → 路1优先
-- "其他"类概率 ≤ 20%；LLM 不可用时使用规则算法
+#### D2：概率分配（D-S 证据理论）
+- 废弃旧 LLM 概率分配，改用 **Dempster-Shafer 证据理论**
+- **Step 0**：LLM 语义合并 + 冲突检测（轻量调用，合并同义归因，标记互斥）
+- **Step 1**：构建路1 mass m₁ — ε₁=0.35 固定；k=1→0.65, k=2→73开, 空→全给 Θ
+- **Step 2**：构建路2 mass m₂ — ε₂=0.30 固定；取 consensus_weight 前 5 名归一化后 ×0.70
+- **Step 3**：Dempster 合成 — K>0.6 标注"严重冲突"但不中断
+- **Step 4**：Pignistic 转概率 — m(Θ) 按比例分摊到各原因，保证 Σ=1.0
+- **输出**：`ProbabilityAssignment` 含 `ds_metadata`（m1/m2/mass_final/conflict_K）
 
 ### E层：最终输出打分与报告
 
@@ -172,7 +177,13 @@
 | **第0层** | OCR 纠错 | 无 → `text_corrector.py` 新增 |
 | **第0层** | OCR 性能 | 逐个 replace → **编译正则单次扫描 O(n)** |
 | **schemas/reasoning.py** | 排序字段 | Explanation/Hypothesis 增加 confidence_rank |
-| **测试** | 数量 | 26 tests → **51 tests**（新增 26 个 D1 隔离测试） |
+| **schemas/reasoning.py** | D-S 元数据 | ProbabilityAssignment 新增 ds_metadata 字段 |
+| **D1** | 输出上限 | 两路 5 条上限（lookups[:5] / hypotheses[:5]） |
+| **D2** | 概率算法 | LLM 概率分配 → **D-S 证据理论**（Dempster-Shafer） |
+| **D2** | 参数体系 | 硬编码70/30 → **ε₁=0.35, ε₂=0.30, K>0.6 冲突标注** |
+| **D2** | 路2 权重 | 无 → **consensus_weight = source_authority × source_count_bonus** |
+| **D2** | prompt | d2_probability.yaml → **d2_merge_conflict.yaml**（语义合并+冲突检测） |
+| **测试** | 数量 | 51 tests → **83 tests**（新增 32 个 D2 D-S 测试） |
 
 ---
 

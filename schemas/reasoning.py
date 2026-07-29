@@ -56,5 +56,6 @@ class ProbabilityAssignment(BaseModel):
     anomaly_source: str                          # B+ / C
     lookups: list[Explanation]                   # 路1结果
     hypotheses: list[Hypothesis]                 # 路2结果
-    probabilities: dict[str, float]              # 归因概率（如 {"经营滞销": 0.6, "战略备货": 0.3, "其他": 0.1}）
-    reasoning_summary: Optional[str] = None      # 综合判断依据
+    probabilities: dict[str, float]              # 归因概率（pignistic 转换后，sum=1.0）
+    reasoning_summary: Optional[str] = None      # 综合判断依据（已废弃，保留兼容）
+    ds_metadata: Optional[dict] = None           # D-S 证据理论元数据

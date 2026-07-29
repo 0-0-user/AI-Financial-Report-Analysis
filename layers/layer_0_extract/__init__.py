@@ -9,7 +9,7 @@ from .merger import TableMerger
 from .text_corrector import correct_raw_document
 
 
-@registry.register("layer_0")
+@registry.register("layer_0", requires=["_pdf_path"])
 def run(ctx: PipelineContext) -> None:
     """注册为 layer_0 步骤"""
     pdf_path = getattr(ctx, "_pdf_path", None)

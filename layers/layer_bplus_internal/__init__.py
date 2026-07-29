@@ -20,7 +20,7 @@ from pipeline.context import PipelineContext
 from .logic_checks import run_all_checks, run_internal_control_check, calc_risk_level
 
 
-@registry.register("layer_bplus")
+@registry.register("layer_bplus", requires=["validation_passed", "financials", "tags"])
 def run(ctx: PipelineContext) -> None:
     if not ctx.validation_passed:
         ctx.warnings.append("B层校验未通过，跳过B+层检查")

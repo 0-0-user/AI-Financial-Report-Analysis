@@ -20,7 +20,6 @@ SerpAPI Key 从环境变量 SERPAPI_KEY 读取。
 import json
 import logging
 import os
-from typing import Optional
 
 from pipeline.context import PipelineContext
 
@@ -41,14 +40,10 @@ def run_macro_search(ctx: PipelineContext) -> list[str]:
     Returns:
         客观事实文本列表（跨 4 维度展平），供 D1 路2 使用
     """
-    if not ctx.raw_doc:
-        logger.warning("A0: raw_doc 不存在，跳过宏观搜索")
-        return []
-
-    # 准备上下文变量
+    # 准备上下文变量（调度器保证 raw_doc / tags / financials 已就绪）
     business_desc = ctx.raw_doc.company_overview.business_description or ""
-    industry_tags = _format_industry_tags(ctx)
-    year = str(ctx.raw_doc.metadata.report_year or ctx.financials.year if ctx.financials else 2024)
+    industry_tags = _format_industry_tags(ctx.tags)
+    year = str(ctx.raw_doc.metadata.report_year or ctx.financials.year)
 
     # 步骤1：生成搜索词
     search_queries = _generate_search_queries(
@@ -244,12 +239,8 @@ def _extract_facts(
 # 上下文提取工具
 # ────────────────────────────────────────
 
-def _format_industry_tags(ctx: PipelineContext) -> str:
+def _format_industry_tags(tags) -> str:
     """格式化行业标签为 prompt 变量"""
-    tags = ctx.tags
-    if not tags:
-        return "行业标签未知"
-
     parts = []
     if tags.hard_tags:
         parts.append("硬标签: " + "; ".join(

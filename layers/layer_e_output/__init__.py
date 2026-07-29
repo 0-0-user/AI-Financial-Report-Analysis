@@ -6,7 +6,7 @@ from .e1_scoring import run_scoring
 from .e2_report_gen import generate_report
 
 
-@registry.register("layer_e")
+@registry.register("layer_e", requires=["reasoning_results", "deviations", "logic_anomalies", "tags", "financials", "benchmark"])
 def run(ctx: PipelineContext) -> None:
     """E1 → E2 顺序执行"""
     score = run_scoring(ctx)

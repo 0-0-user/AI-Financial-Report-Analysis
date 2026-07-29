@@ -1,42 +1,20 @@
 # ==========================================================
-# config/thresholds.yaml — B+ / C 层：异常判定阈值
+# config/thresholds.yaml — D2 层：D-S 证据理论参数
 # ==========================================================
 #
-# 本文件定义了系统检测异常时的判定阈值。
+# 本文件专用于 D2 层 D-S 证据理论的 mass 分配参数。
 #
-# B+ 层阈值（逻辑检查）：
-#   净现比 / 收现比：比值低于 normal_range 下限时标记为异常，
-#   低于 severe_threshold 时标记为严重
-#   存贷双高：货币资金/总资产 和 有息负债/总资产 都超过 both_above
-#   母子资金分离：分离度超过 severe_ratio 为严重，超过 warning_ratio 为警告
+# D-S 参数说明：
+#   epsilon_1: 路1 uncertainty（年报未提及时 mass 全归 Θ）
+#   epsilon_2: 路2 uncertainty（外部推演不确定时 mass 全归 Θ）
+#   path1_split_primary: 路1 k=2 时的主要归因占比（剩余给次要）
+#   path1_split_secondary: 路1 k=2 时的次要归因占比
+#   path2_top_n: 路2 保留的假设数量上限（按 consensus_weight 排序取前 N）
+#   conflict_threshold: Dempster 合成 K 值超过此阈值时标注 severe_conflict
 #
-# C 层阈值（MAD 偏离度）：
-#   mad_threshold: 偏离超过此值标记为"异常"
-#   extreme_threshold: 偏离超过此值标记为"极端异常"
-#
-# 由谁维护：分析师（可根据行业特性调整阈值）
-# 被谁使用：B+ 层（layers/layer_bplus_internal/logic_checks.py）
-#          C 层（layers/layer_c_deviation/mad_calculator.py）
-
-bplus:
-  净现比:
-    normal_range: [0.6, 2.0]
-    severe_threshold: 0.0
-
-  收现比:
-    normal_range: [0.6, 1.5]
-    severe_threshold: 0.3
-
-  存贷双高:
-    both_above: 0.3
-
-  母子资金分离度:
-    severe_ratio: 0.3
-    warning_ratio: 0.15
-
-c_layer:
-  mad_threshold: 2.0
-  extreme_threshold: 5.0
+# 由谁维护：项目负责人
+# 被谁使用：D2 层（layers/layer_d_reasoning/d2_probability.py）
+#          注：B+ / C 层阈值已迁至 config/industry_thresholds.yaml
 
 d2_layer:
   # 路1 uncertainty（年报未提及的剩余质量）

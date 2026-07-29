@@ -26,11 +26,18 @@ class StepRegistry:
 
     def __init__(self):
         self._steps: dict[str, Callable] = {}
+        self._requirements: dict[str, list[str]] = {}
 
-    def register(self, name: str) -> Callable:
-        """装饰器：注册一个步骤"""
+    def register(self, name: str, *, requires: list[str] | None = None) -> Callable:
+        """装饰器：注册一个步骤
+
+        Args:
+            name: 步骤名称
+            requires: 执行前需要 ctx 中已存在的字段名列表
+        """
         def decorator(func: Callable) -> Callable:
             self._steps[name] = func
+            self._requirements[name] = requires or []
             return func
         return decorator
 
@@ -38,6 +45,14 @@ class StepRegistry:
         if name not in self._steps:
             raise KeyError(f"步骤 '{name}' 未注册")
         return self._steps[name]
+
+    def check_requirements(self, name: str, ctx) -> list[str]:
+        """检查步骤依赖的 ctx 字段是否都存在，返回缺失字段列表"""
+        missing: list[str] = []
+        for field in self._requirements.get(name, []):
+            if getattr(ctx, field, None) is None:
+                missing.append(field)
+        return missing
 
     def list_steps(self) -> list[str]:
         return list(self._steps.keys())

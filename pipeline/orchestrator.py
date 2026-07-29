@@ -29,6 +29,7 @@ class Orchestrator:
             "layer_0",
             "layer_a",
             "layer_b",
+            "layer_amacro",
             "layer_bplus",
             "layer_c",
             "layer_d",
@@ -45,10 +46,19 @@ class Orchestrator:
     def run(self, pdf_path: str) -> Report:
         """执行完整流水线"""
         ctx = PipelineContext()
+        ctx._pdf_path = pdf_path
 
         for step_name in self._step_order:
             if step_name in self._skip_steps:
                 continue
+
+            # 前置依赖检查：缺字段则直接终止
+            missing = registry.check_requirements(step_name, ctx)
+            if missing:
+                ctx.errors.append(
+                    f"步骤 '{step_name}' 前置依赖不满足，缺少字段: {', '.join(missing)}，终止流水线"
+                )
+                break
 
             try:
                 step_func = registry.get(step_name)

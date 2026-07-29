@@ -45,7 +45,7 @@ def main():
     orch = Orchestrator()
     if args.start_from:
         # 跳过起始步骤之前的所有步骤
-        step_order = ["layer_0", "layer_a", "layer_b", "layer_bplus", "layer_c", "layer_d", "layer_e"]
+        step_order = ["layer_0", "layer_a", "layer_b", "layer_amacro", "layer_bplus", "layer_c", "layer_d", "layer_e"]
         for step in step_order:
             if step == args.start_from:
                 break

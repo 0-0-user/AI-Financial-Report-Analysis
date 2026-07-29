@@ -6,7 +6,7 @@ from .d1_dual_path import run_dual_path_analysis
 from .d2_probability import run_probability_allocation
 
 
-@registry.register("layer_d")
+@registry.register("layer_d", requires=["raw_doc", "macro_facts", "tags", "logic_anomalies", "deviations"])
 def run(ctx: PipelineContext) -> None:
     """D1 → D2 顺序执行"""
     # D1: 双路径推理（遍历所有异常）

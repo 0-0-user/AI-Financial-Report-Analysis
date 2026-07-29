@@ -1,7 +1,14 @@
 """B+ 层扩展：财务造假检测模式库
 
-在 PDF 架构文档中，B+ 层只定义了 3 项基本检查（净现比、存贷双高、母子分离）。
-本模块补充 7 项额外的造假检测模式，覆盖更全面的财务造假识别场景。
+基础 7 项 + Beneish M-Score 8 指标 (Beneish 1999, 被引 2,100+)。
+
+M-Score 公式:
+  M = -4.84 + 0.920*DSRI + 0.528*GMI + 0.404*AQI + 0.892*SGI
+      + 0.115*DEPI - 0.172*SGAI + 4.679*TATA - 0.327*LVGI
+  阈值: M > -1.78 → 操纵嫌疑 (~76% 准确率)
+"""
+
+from layers.layer_bplus_internal.logic_checks import _get_value
 
 这些模式参考了：
 - 学术界财务造假检测文献（Beneish M-Score, Dechow F-Score）
@@ -305,17 +312,156 @@ def check_big_bath(financials: FinancialStatement) -> Optional[LogicAnomaly]:
     return None
 
 
+# ═══════════════════════════════════════════════
+# Beneish M-Score (Beneish 1999, FAJ, 被引 2,100+)
+# ═══════════════════════════════════════════════
+
+def calc_beneish_m_score(
+    current: FinancialStatement,
+    prior: FinancialStatement | None = None,
+) -> dict | None:
+    """Beneish M-Score: 8 指标综合盈余操纵检测
+
+    参考文献: Beneish (1999) "The Detection of Earnings Manipulation"
+              Financial Analysts Journal, 55(5), 24-36. 被引 > 2,100 次.
+
+    公式:
+      M = -4.84 + 0.920*DSRI + 0.528*GMI + 0.404*AQI + 0.892*SGI
+          + 0.115*DEPI - 0.172*SGAI + 4.679*TATA - 0.327*LVGI
+
+    阈值: M > -1.78 → 操纵嫌疑（~76% 准确率）
+
+    Returns:
+        {"m_score": float, "indicators": dict, "flagged": bool} 或 None（数据不足）
+    """
+    if prior is None:
+        return None
+
+    # ── 提取当期数据 ──
+    ar_t = _get_value(current, "Accounts_Receivable", "bs")
+    sales_t = _get_value(current, "Revenue_Total", "pl")
+    cogs_t = _get_value(current, "Cost_Revenue", "pl")
+    ca_t = _get_value(current, "Current_Assets", "bs")
+    ppe_t = _get_value(current, "PPE_Net", "bs")
+    ta_t = _get_value(current, "Total_Assets", "bs")
+    dep_t = _get_value(current, "Depreciation", "pl")
+    sga_t = _get_value(current, "SGA_Expense", "pl")
+    cl_t = _get_value(current, "Current_Liabilities", "bs")
+    ltd_t = _get_value(current, "Long_Term_Debt", "bs")
+    ni_t = _get_value(current, "Net_Profit", "pl")
+    cfo_t = _get_value(current, "Operating_Cash_Flow", "cf")
+    sec_t = _get_value(current, "Monetary_Funds", "bs") or 0  # Securities ≈ 货币资金近似
+
+    # ── 提取上期数据 ──
+    ar_prev = _get_value(prior, "Accounts_Receivable", "bs")
+    sales_prev = _get_value(prior, "Revenue_Total", "pl")
+    cogs_prev = _get_value(prior, "Cost_Revenue", "pl")
+    ca_prev = _get_value(prior, "Current_Assets", "bs")
+    ppe_prev = _get_value(prior, "PPE_Net", "bs")
+    ta_prev = _get_value(prior, "Total_Assets", "bs")
+    dep_prev = _get_value(prior, "Depreciation", "pl")
+    sga_prev = _get_value(prior, "SGA_Expense", "pl")
+    cl_prev = _get_value(prior, "Current_Liabilities", "bs")
+    ltd_prev = _get_value(prior, "Long_Term_Debt", "bs")
+    ni_prev = _get_value(prior, "Net_Profit", "pl")
+    sec_prev = _get_value(prior, "Monetary_Funds", "bs") or 0
+
+    # 有效性检查
+    required = [ar_t, sales_t, cogs_t, ta_t, dep_t, sga_t, cl_t, ni_t, cfo_t,
+                ar_prev, sales_prev, cogs_prev, ta_prev]
+    if any(v is None or v == 0 for v in required):
+        return None
+
+    # ── 计算 8 个指标 ──
+    indicators = {}
+
+    # DSRI: 应收款周转天数指数
+    dsri = (ar_t / sales_t) / (ar_prev / sales_prev) if sales_prev > 0 else 1.0
+    indicators["DSRI"] = dsri
+
+    # GMI: 毛利率指数
+    gm_t = (sales_t - cogs_t) / sales_t
+    gm_prev = (sales_prev - cogs_prev) / sales_prev
+    gmi = gm_prev / gm_t if gm_t > 0 else 1.0
+    indicators["GMI"] = gmi
+
+    # AQI: 资产质量指数
+    numerator_t = 1 - (ca_t + ppe_t + sec_t) / ta_t if ta_t > 0 else 0
+    numerator_prev = 1 - (ca_prev + ppe_prev + sec_prev) / ta_prev if ta_prev > 0 else 0
+    aqi = numerator_t / numerator_prev if numerator_prev > 0 else 1.0
+    indicators["AQI"] = aqi
+
+    # SGI: 销售增长指数
+    sgi = sales_t / sales_prev if sales_prev > 0 else 1.0
+    indicators["SGI"] = sgi
+
+    # DEPI: 折旧指数
+    dep_rate_t = dep_t / (ppe_t + dep_t) if (ppe_t + dep_t) > 0 else 0
+    dep_rate_prev = dep_prev / (ppe_prev + dep_prev) if (ppe_prev + dep_prev) > 0 else 0
+    depi = dep_rate_prev / dep_rate_t if dep_rate_t > 0 else 1.0
+    indicators["DEPI"] = depi
+
+    # SGAI: 销售管理费用指数
+    sgai = (sga_t / sales_t) / (sga_prev / sales_prev) if sales_prev > 0 else 1.0
+    indicators["SGAI"] = sgai
+
+    # LVGI: 杠杆指数
+    lev_t = (cl_t + ltd_t) / ta_t if ta_t > 0 else 0
+    lev_prev = (cl_prev + ltd_prev) / ta_prev if ta_prev > 0 else 0
+    lvgi = lev_t / lev_prev if lev_prev > 0 else 1.0
+    indicators["LVGI"] = lvgi
+
+    # TATA: 总应计/总资产
+    tata = (ni_t - cfo_t) / ta_t if ta_t > 0 else 0
+    indicators["TATA"] = tata
+
+    # ── M-Score ──
+    m_score = (
+        -4.84
+        + 0.920 * dsri + 0.528 * gmi + 0.404 * aqi + 0.892 * sgi
+        + 0.115 * depi - 0.172 * sgai + 4.679 * tata - 0.327 * lvgi
+    )
+    flagged = m_score > -1.78
+
+    return {"m_score": round(m_score, 4), "indicators": indicators, "flagged": flagged}
+
+
+def check_m_score_anomaly(
+    current: FinancialStatement,
+    prior: FinancialStatement | None = None,
+) -> LogicAnomaly | None:
+    """M-Score > -1.78 → 盈余操纵嫌疑"""
+    result = calc_beneish_m_score(current, prior)
+    if result is None:
+        return None
+    if not result["flagged"]:
+        return None
+
+    severity = 3.0 if result["m_score"] > -1.0 else 2.0
+    high_indicators = [k for k, v in result["indicators"].items() if v > 1.1]
+    return LogicAnomaly(
+        check_name="M-Score盈余操纵",
+        value=result["m_score"],
+        threshold=-1.78,
+        severity=severity,
+        summary=f"M-Score={result['m_score']:.2f}（阈值-1.78），"
+                f"偏高指标: {', '.join(high_indicators) if high_indicators else 'TATA/LVGI'}",
+    )
+
+
 # ────────────────────────────────────────────
 # 扩展检查入口
 # ────────────────────────────────────────────
 
-def run_extended_checks(financials: FinancialStatement) -> list[LogicAnomaly]:
-    """执行扩展的 7 项造假检测（不含基础 3 项）
+def run_extended_checks(
+    financials: FinancialStatement,
+    prior: FinancialStatement | None = None,
+) -> list[LogicAnomaly]:
+    """执行扩展造假检测（基础 7 项 + M-Score）
 
-    使用方式：
-        basic = run_all_checks(consolidated, parent)     # 基础3项
-        extended = run_extended_checks(consolidated)      # 扩展7项
-        all_anomalies = basic + extended
+    Args:
+        financials: 当期财务报表
+        prior: 上期财务报表（可选，用于M-Score）
     """
     checks = [
         check_receivable_revenue_gap,
@@ -333,8 +479,16 @@ def run_extended_checks(financials: FinancialStatement) -> list[LogicAnomaly]:
             result = check_fn(financials)
             if result:
                 anomalies.append(result)
-        except Exception as e:
-            # 任何单个检查失败不影响其他检查
+        except Exception:
+            pass
+
+    # M-Score（需要跨期数据）
+    if prior:
+        try:
+            ms = check_m_score_anomaly(financials, prior)
+            if ms:
+                anomalies.append(ms)
+        except Exception:
             pass
 
     return anomalies

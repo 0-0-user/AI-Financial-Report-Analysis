@@ -479,3 +479,73 @@ fields:
     短期借款: "Short_Term_Borrowing"
     长期借款: "Long_Term_Borrowing"
     经营现金流: "Operating_Cash_Flow"
+
+  # ═══════════════════════════════════════════════
+  # M-Score / 跨期分析所需字段
+  # ═══════════════════════════════════════════════
+  Current_Assets:
+    chinese_variants:
+      - "流动资产合计"
+      - "流动资产"
+      - "流动资产总额"
+    english_variants:
+      - "Current Assets"
+      - "Total Current Assets"
+    type: "balance_sheet"
+    description: "流动资产合计"
+
+  PPE_Net:
+    chinese_variants:
+      - "固定资产净额"
+      - "固定资产净值"
+      - "固定资产"
+      - "物业厂房及设备"
+    english_variants:
+      - "Property, Plant and Equipment"
+      - "PP&E"
+      - "Fixed Assets, Net"
+    type: "balance_sheet"
+    description: "固定资产净额"
+
+  Depreciation:
+    chinese_variants:
+      - "折旧"
+      - "折旧费用"
+      - "固定资产折旧"
+      - "累计折旧"
+    english_variants:
+      - "Depreciation"
+      - "Depreciation Expense"
+    type: "profit_loss"
+    description: "折旧费用"
+
+  Current_Liabilities:
+    chinese_variants:
+      - "流动负债合计"
+      - "流动负债"
+    english_variants:
+      - "Current Liabilities"
+      - "Total Current Liabilities"
+    type: "balance_sheet"
+    description: "流动负债合计"
+
+  Long_Term_Debt:
+    chinese_variants:
+      - "长期债务"
+      - "长期借款"
+    english_variants:
+      - "Long-Term Debt"
+      - "Non-Current Borrowings"
+    type: "balance_sheet"
+    description: "长期债务（含长期借款+应付债券）"
+
+  SGA_Expense:
+    chinese_variants:
+      - "销售费用"
+      - "销售及管理费用"
+      - "销售费用和管理费用"
+    english_variants:
+      - "Selling, General and Administrative"
+      - "SG&A"
+    type: "profit_loss"
+    description: "销售及管理费用（销售费用+管理费用）"

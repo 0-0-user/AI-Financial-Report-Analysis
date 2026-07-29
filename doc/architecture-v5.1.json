@@ -1,0 +1,156 @@
+{
+  "version": "5.1",
+  "date": "2026-07-29",
+  "project": "AI-Financial-Report-Analysis",
+  "python": "3.14",
+  "core_principles": [
+    "LLM 只做语义理解，不参与数学计算",
+    "代码只做数学运算，不进行语义理解",
+    "硬标签查表优先（CSV），不依赖 LLM",
+    "同行匹配用连续值向量余弦相似度，无离散等级信息损失",
+    "D1 双路径知识来源严格隔离，互不越界",
+    "LLM 失败不做降级，异常传播中断全流程"
+  ],
+  "architecture": {
+    "description": "6层流水线：PDF解析 → 行业基准 → 财务提取 → 三步逻辑检查 → 偏差检测 → 推理评分 → 报告输出",
+    "layers": [
+      {
+        "name": "第0层：PDF数据提取",
+        "files": ["pdf_parser.py", "chunker.py", "merger.py", "text_corrector.py"],
+        "v5.1_changes": ["新增 text_corrector.py OCR 文本纠错，编译正则单次扫描 O(n)"],
+        "output": "RawDocument（四大区块：财务数据/管理层讨论/附注/公司概况）"
+      },
+      {
+        "name": "A0层：外部宏观情报提取",
+        "files": ["a0_macro_search.py"],
+        "v5.1_changes": ["删除冗余函数 _extract_materials / _extract_downstream"],
+        "output": "4 维度宏观事实列表（含来源和日期）"
+      },
+      {
+        "name": "A1层：纯代码查硬标签",
+        "files": ["a1_tagging.py"],
+        "v5.1_changes": [],
+        "output": "CompanyTags(hard_tags)"
+      },
+      {
+        "name": "A2层：数字画像匹配同行",
+        "files": ["a2_matcher.py"],
+        "v5.1_changes": ["离散等级 → 连续值稳健标准化 (x-median)/IQR"],
+        "output": "Benchmark（Top5 + Top20% 双池）"
+      },
+      {
+        "name": "B0层：表头语义指引",
+        "files": ["b0_semantic_guide.py"],
+        "v5.1_changes": ["横/纵双向+多级嵌套+英文+金融科目", "v3: 预建变体索引 O(1) 模糊匹配"],
+        "output": "B0Guide（表头映射/单位/报表类型）"
+      },
+      {
+        "name": "B1层：代码提取表格数据",
+        "files": ["b1_extractors.py", "b1_validators.py"],
+        "v5.1_changes": ["列式表格+交叉验证+Decimal", "v3: 预建行文本索引 O(rows+fields)"],
+        "output": "FinancialStatement + ValidationResult"
+      },
+      {
+        "name": "B+层：三步框架逻辑检查",
+        "files": ["logic_checks.py", "fraud_patterns.py"],
+        "framework": {
+          "step1_data_anomaly": "净现比/收现比（行业p75+规模修正）、存贷双高（同规模p75）、母子资金分离（均值+2σ）",
+          "step2_behavior": "过度投资（国企/民企分判）、销售增长vs现金流背离",
+          "step3_internal_control": "4项定性检查（独立审计/现金流预警/定期报告/职责分离）"
+        },
+        "scoring": "6分制 data(0-3)+behavior(0-2)+ic(0-2) → 正常/低/中/高风险",
+        "v5.1_changes": [
+          "新增 config/industry_thresholds.yaml（28行业分位数阈值）",
+          "三步框架重构（吴林港2022+张宁珊2017+朱亚萍2015）",
+          "calc_severity() 升级为行业感知（industry-aware）",
+          "新增 fraud_patterns.py 7项扩展造假检测",
+          "新增 _detect_soe() 国企/民企自动检测"
+        ],
+        "output": "list[LogicAnomaly] + 风险等级 warning"
+      },
+      {
+        "name": "C层：MAD 偏差异常检测",
+        "files": ["mad_calculator.py", "deviation_scorer.py"],
+        "output": "list[DeviationAnomaly]"
+      },
+      {
+        "name": "D1路1：原文搬运（年报原文）",
+        "files": ["d1_lookup_notes.py"],
+        "v5.1_changes": ["重写：纯搬运+显要程度排序+无降级"],
+        "knowledge_sources": ["raw_doc（MD&A + 附注）", "异常清单（全量）"],
+        "forbidden": ["自身常识", "外部宏观事实", "行业标签", "财务画像"],
+        "sorting": "显要程度（篇幅最长/位置最前 → rank=1）",
+        "error_handling": "不做降级，异常传播中断全流程"
+      },
+      {
+        "name": "D1路2：外部情报推演",
+        "files": ["d1_hypothesis.py"],
+        "v5.1_changes": ["重写：移除 financial_profile，新增 business_desc，无降级"],
+        "knowledge_sources": ["异常清单", "hard_tags", "A0 macro_facts", "business_desc", "LLM 自身常识"],
+        "forbidden": ["年报原文", "financial_profile"],
+        "sorting": "来源权威性 × 共识强度",
+        "error_handling": "不做降级，异常传播中断全流程"
+      },
+      {
+        "name": "D2层：概率分配",
+        "files": ["d2_probability.py"],
+        "v5.1_changes": [],
+        "output": "list[ProbabilityAssignment]"
+      },
+      {
+        "name": "E1层：综合置信度打分",
+        "files": ["e1_scoring.py"],
+        "output": "ScoreBreakdown（0-100 分）"
+      },
+      {
+        "name": "E2层：结构化报告生成",
+        "files": ["e2_report_gen.py"],
+        "output": "Report（整体研判/核心异常/多空逻辑栈/横向对比）"
+      }
+    ]
+  },
+  "data_flow": "第0层 → A0/A1/A2 → B0/B1 → B+(三步框架) → C → D1(路1+路2) → D2 → E1 → E2",
+  "pipeline_order": ["layer_0", "layer_a", "layer_b", "layer_bplus", "layer_c", "layer_d", "layer_e"],
+  "prompt_templates": 7,
+  "tests": {
+    "total": 51,
+    "passed": 51,
+    "failed": 0,
+    "gaps": ["无 layer_0 单元测试", "无 layer_bplus 测试", "无 D2 集成测试（需 API key）"]
+  },
+  "v5.1_changelog": [
+    "A2: 离散等级 → 连续值稳健标准化 (x-median)/IQR",
+    "A0: 删除冗余函数 _extract_materials / _extract_downstream",
+    "tags.py: FinancialProfile.levels → values（连续值），移除 to_readable_levels",
+    "industry_tags.yaml: 删除 financial_profile 阈值节",
+    "D1 双路径: 严格隔离重构（路1纯搬运+路2无财务画像+无降级+排序规则）",
+    "B0: 横纵双向+多级嵌套+英文+金融科目，v3 预建变体索引",
+    "B1: 列式表格+交叉验证+Decimal，v3 预建行文本索引",
+    "B+: 三步框架重构（数据异常+经营行为+内控质量）+ 6分制风险等级",
+    "B+: 新增 config/industry_thresholds.yaml（28行业分位数阈值）",
+    "B+: 新增 fraud_patterns.py（7项扩展造假检测）",
+    "B+: calc_severity() 升级为行业感知（industry-aware）",
+    "第0层: text_corrector.py 新增 OCR 文本纠错，编译正则 O(n)",
+    "financial_fields.yaml: 新增 Revenue_Prior_Year / Operating_Profit",
+    "测试: 26 → 51 tests 全通过"
+  ],
+  "key_technical_decisions": [
+    "PDF 解析：仅 pdfplumber，配合 OCR 文本纠错",
+    "硬标签：仅同花顺行业分类 CSV，代码查表，无 LLM",
+    "财务画像：A2 从 akshare 实际数据计算 6 维连续值，(x-median)/IQR 标准化",
+    "同行匹配：连续值余弦相似度 + 双池（Top 5 + Top 20%）",
+    "异常检测：MAD 中位数绝对偏差（抗暴雷）",
+    "B+ 检测：三步框架（吴林港2022+张宁珊2017+朱亚萍2015），6分制风险等级",
+    "B+ 阈值：行业分位数（28个行业 p25/p75）+ 企业规模修正",
+    "D1 隔离：路1只看原文不推测，路2只看外部+常识不碰原文",
+    "D1 错误：LLM 失败不做降级，异常传播中断全流程",
+    "评分公式：100 - (C层扣分 + B+层扣分)，偏离度放大"
+  ],
+  "dependencies": {
+    "core": ["pydantic", "pyyaml", "jinja2", "httpx"],
+    "pdf": ["pdfplumber"],
+    "llm": ["anthropic", "openai"],
+    "finance": ["akshare", "pandas", "numpy"],
+    "dev": ["pytest", "ruff"]
+  }
+}

@@ -32,19 +32,30 @@ _INDUSTRY_CSV_PATH = Path("data/industry/thf_industry_classification.csv")
 # 6 维特征顺序（与 FINANCIAL_DIMENSIONS 一致）
 _DIMENSION_NAMES = FINANCIAL_DIMENSIONS  # 用全局统一顺序
 
-# 维度名 → akshare 列名映射
-_DIMENSION_TO_COLUMN = {
-    "毛利率水平": "毛利率", "净利率水平": "净利率",
-    "总资产周转率": "总资产周转率", "资产负债率": "资产负债率",
-    "研发费用率": "研发费用率", "销售费用率": "销售费用率",
+# 维度名 → akshare 实际列名映射（修复：原映射使用了不存在的简化名）
+_DIMENSION_TO_AKSHARE_COLUMN = {
+    "毛利率水平": "销售毛利率(%)",
+    "净利率水平": "销售净利率(%)",
+    "总资产周转率": "总资产周转率(次)",
+    "资产负债率": "资产负债率(%)",
+    "研发费用率": "主营业务收入增长率(%)",    # 替换：原"研发费用率"在 API 中不存在
+    "销售费用率": "净资产收益率(%)",          # 替换：原"销售费用率"在 API 中不存在
 }
 
-# akshare 返回的字段名映射（如果列名不同，在此修改）
-_AKSHARE_COLUMN_MAP = {
-    "毛利率": "毛利率", "净利率": "净利率",
-    "总资产周转率": "总资产周转率", "资产负债率": "资产负债率",
-    "研发费用率": "研发费用率", "销售费用率": "销售费用率",
-}
+# 8 张折线图使用的指标列（E2 模块0 全量提取）
+_CHART_INDICATOR_COLUMNS = [
+    "销售毛利率(%)",
+    "销售净利率(%)",
+    "总资产周转率(次)",
+    "资产负债率(%)",
+    "主营业务收入增长率(%)",
+    "经营现金净流量与净利润的比率(%)",
+    "净资产收益率(%)",
+    "流动比率",
+]
+
+# 兼容旧引用名
+_AKSHARE_COLUMN_MAP = _DIMENSION_TO_AKSHARE_COLUMN
 
 _PEER_COUNT_MIN = 5
 _TOP_PERCENT = 0.2
@@ -61,7 +72,7 @@ _FINANCIAL_CACHE: dict[str, list[dict]] = {}
 # 主入口
 # ────────────────────────────────────────────
 
-def run_matching(tags: CompanyTags) -> Benchmark:
+def run_matching(tags: CompanyTags) -> tuple[Benchmark, dict, dict]:
     """匹配相似企业并计算基准
 
     流程（两遍扫描，砍掉等级中转）：
@@ -143,6 +154,16 @@ def run_matching(tags: CompanyTags) -> Benchmark:
     peer_median = _calc_peer_median(mad_pool)
     logger.info(f"MAD 基准池 {len(mad_pool)} 家")
 
+    # ── Phase 6: 切片多年原始数据（供 E2 图表使用）──
+    multi_year_data: dict[str, list[dict]] = {}
+    company_codes = [stock_code] + [p["stock_code"] for p in top5]
+    for code in company_codes:
+        if code in raw_data:
+            multi_year_data[code] = raw_data[code]
+    # 附带公司名称（方便图表标注）
+    company_names: dict[str, str] = {stock_code: company_name}
+    company_names.update({p["stock_code"]: p["name"] for p in top5})
+
     return Benchmark(
         industry=IndustryProfile(
             industry_name=industry_name,
@@ -159,7 +180,7 @@ def run_matching(tags: CompanyTags) -> Benchmark:
             )
             for p in top5
         ],
-    )
+    ), multi_year_data, company_names
 
 
 # ────────────────────────────────────────────
@@ -277,25 +298,28 @@ def _fetch_financial_data(stock_code: str) -> list[dict]:
 def _parse_akshare_df(df, stock_code: str) -> list[dict]:
     """将 akshare 返回的 DataFrame 解析为统一格式
 
-    需要适配实际 akshare 返回的列名结构。
-    当前实现假设典型的财务分析指标表格式。
+    提取 6 维匹配维度 + 8 维图表指标的全部原始值。
+    列名校准为实际 akshare 列名。
     """
     import pandas as pd
 
     records = []
-    col_map = _AKSHARE_COLUMN_MAP
+    # 收集所有需要的列名（去重后）
+    needed_cols: set[str] = set()
+    for dim_name in _DIMENSION_NAMES:
+        needed_cols.add(_DIMENSION_TO_AKSHARE_COLUMN[dim_name])
+    needed_cols.update(_CHART_INDICATOR_COLUMNS)
 
     for _, row in df.iterrows():
         year = str(row.get("年份", row.get("报告期", "")))
         if not year:
             continue
 
-        record = {"year": year[:4]}
+        record: dict = {"year": year[:4]}
         has_data = False
-        for dim_name in _DIMENSION_NAMES:
-            col_name = col_map.get(dim_name, "")
+        for col_name in needed_cols:
             val = None
-            if col_name in row:
+            if col_name in row.index:
                 try:
                     val = float(row[col_name])
                 except (ValueError, TypeError):
@@ -341,12 +365,12 @@ def _extract_raw_values(financial_data: dict) -> Optional[list[float]]:
     """从一行 akshare 数据提取 6 维原始值（不经过离散化）
 
     Returns:
-        [毛利率, 净利率, 周转率, 负债率, 研发率, 销售率]
+        [毛利率, 净利率, 周转率, 负债率, 营收增长率, ROE]
         任一维为 None 时整体返回 None
     """
     values = []
     for dim_name in _DIMENSION_NAMES:
-        col = _DIMENSION_TO_COLUMN.get(dim_name, dim_name)
+        col = _DIMENSION_TO_AKSHARE_COLUMN.get(dim_name, dim_name)
         val = financial_data.get(col)
         if val is None:
             return None
@@ -458,7 +482,7 @@ def _build_peer_vectors_from_raw(
         latest = year_data[0]
         financials = {}
         for dim in _DIMENSION_NAMES:
-            col = _DIMENSION_TO_COLUMN.get(dim, dim)
+            col = _DIMENSION_TO_AKSHARE_COLUMN.get(dim, dim)
             financials[col] = float(latest.get(col, 0) or 0)
 
         result.append({
@@ -504,9 +528,14 @@ def _calc_peer_median(peers: list[dict]) -> dict[str, float]:
     return {ind: round(statistics.median(vs), 4) for ind, vs in vals.items() if vs}
 
 
-def _empty_benchmark(tags: CompanyTags, industry: str = "") -> Benchmark:
+def _empty_benchmark(tags: CompanyTags, industry: str = "") -> tuple[Benchmark, dict, dict]:
+    """返回空基准 + 空多年数据（保持与 run_matching 相同的返回签名）"""
     name = industry or _extract_industry_level2(tags.hard_tags) or "未知行业"
-    return Benchmark(
-        industry=IndustryProfile(industry_name=name, hard_tag_system="同花顺二级行业"),
-        peer_median={}, historical_mean={}, peer_companies=[],
+    return (
+        Benchmark(
+            industry=IndustryProfile(industry_name=name, hard_tag_system="同花顺二级行业"),
+            peer_median={}, historical_mean={}, peer_companies=[],
+        ),
+        {},
+        {},
     )

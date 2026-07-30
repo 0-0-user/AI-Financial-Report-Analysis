@@ -61,6 +61,10 @@ class PipelineContext:
     score: Optional[ScoreBreakdown] = None
     report: Optional[Report] = None
 
+    # 多年财务原始数据（供 E2 图表使用，由 A2 层填充）
+    multi_year_financials: Optional[dict[str, list[dict]]] = None
+    multi_year_company_names: Optional[dict[str, str]] = None
+
     # 元信息
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)

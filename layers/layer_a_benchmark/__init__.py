@@ -11,4 +11,7 @@ def run(ctx: PipelineContext) -> None:
     from .a2_matcher import run_matching
 
     ctx.tags = run_tagging(ctx.raw_doc)
-    ctx.benchmark = run_matching(ctx.tags)
+    benchmark, multi_year, company_names = run_matching(ctx.tags)
+    ctx.benchmark = benchmark
+    ctx.multi_year_financials = multi_year
+    ctx.multi_year_company_names = company_names

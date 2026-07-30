@@ -107,6 +107,10 @@ def _score_one_anomaly(
     k_value = ds_meta.get("conflict_K", 0.0)
     delta = 1.0 - k_value
 
+    # 从 mass_final 获取 m(Θ)（未分配的不确定性）
+    mass_final = ds_meta.get("mass_final", {})
+    m_theta = mass_final.get("Θ", 0.0)
+
     # 各归因原因的影响分
     probabilities = reasoning.probabilities or {}
     semantic_scores = reasoning.semantic_scores or {}
@@ -114,6 +118,8 @@ def _score_one_anomaly(
 
     causes_detail: list[CauseDetail] = []
     weighted_sum = 0.0
+    # 用于信任区间的累计：Σ m_i × S_base(H_i)
+    mass_weighted_raw = 0.0
 
     for cause, prob in probabilities.items():
         # S_base: D3 语义匹配结果，没有则默认 -1
@@ -123,6 +129,10 @@ def _score_one_anomaly(
         # 有效影响值 = S_base × (1 - K)
         effective_score = score_base * delta
         weighted_sum += prob * effective_score
+
+        # 从 mass_final 获取该 cause 的原始 mass
+        cause_mass = mass_final.get(cause, 0.0)
+        mass_weighted_raw += cause_mass * score_base
 
         causes_detail.append(CauseDetail(
             cause=cause,
@@ -135,6 +145,24 @@ def _score_one_anomaly(
     # 单异常扣分 = W_phe × Σ(P × S_base × (1-K))
     anomaly_score = w_phe * weighted_sum
 
+    # ── 计算信任区间 [Bel, Pl] ──
+    known = 1.0 - m_theta
+    if m_theta > 0 and semantic_scores and known > 0:
+        # 使用全局语义评分范围的极值 [-3, +2]
+        GLOBAL_S_MIN = -3
+        GLOBAL_S_MAX = 2
+
+        # best: m(Θ) 分配给最高分 → 扣分最少 → 最乐观
+        best_weighted = (mass_weighted_raw + m_theta * GLOBAL_S_MAX) / known
+        score_best = w_phe * delta * best_weighted
+
+        # worst: m(Θ) 分配给最低分 → 扣分最多 → 最悲观
+        worst_weighted = (mass_weighted_raw + m_theta * GLOBAL_S_MIN) / known
+        score_worst = w_phe * delta * worst_weighted
+    else:
+        score_best = anomaly_score
+        score_worst = anomaly_score
+
     return AnomalyScoreDetail(
         indicator=indicator,
         source=source,
@@ -143,6 +171,8 @@ def _score_one_anomaly(
         delta=round(delta, 4),
         causes=causes_detail,
         anomaly_score=round(anomaly_score, 4),
+        score_bel=round(score_worst, 4),
+        score_pl=round(score_best, 4),
     )
 
 

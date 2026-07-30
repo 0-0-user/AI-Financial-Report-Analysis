@@ -1,9 +1,9 @@
-"""B0层：表头语义指引——LLM 识别表头、支持横向/纵向布局 + 多级表头
+"""B0层: 表头语义指引——LLM 识别表头、支持横向/纵向布局 + 多级表头
 
-v2 新增：
-- 横/纵向布局自动检测（row_major vs column_major）
-- 多级合并表头解析（3-4 行表头）
-- 英文变体匹配（港股/美股）
+v2 新增: 
+- 横/纵向布局自动检测 (row_major vs column_major) 
+- 多级合并表头解析 (3-4 行表头) 
+- 英文变体匹配 (港股/美股) 
 - 银行/保险/券商特殊科目识别
 """
 
@@ -17,7 +17,7 @@ from schemas.b0_guide import B0Guide, TableGuide, FieldMapping, ColumnHeader
 
 logger = logging.getLogger(__name__)
 
-# ── 中文列名 → 标准名 ──
+# ── 中文列名 -> 标准名 ──
 COLUMN_ALIASES: dict[str, str] = {
     "期末余额": "end_balance", "期末数": "end_balance",
     "年末余额": "end_balance", "期末": "end_balance",
@@ -55,12 +55,11 @@ _REPORT_TYPE_PATTERNS = [
 ]
 
 # ── 布局检测阈值 ──
-_ROW_MAJOR_THRESHOLD = 6   # 列数≥6 → 行式（科目在行）
-_COL_MAJOR_THRESHOLD = 3   # 列数≤3 且 行数≥10 → 列式（科目在列）
-
+_ROW_MAJOR_THRESHOLD = 3   # 列数>=3 -> 行式 (科目在行) | MinerU 财报表通常 3-4 列
+_COL_MAJOR_THRESHOLD = 3   # 列数<=3 且 行数>=10 -> 列式 (科目在列) 
 
 def run_semantic_guide(raw_doc: RawDocument) -> B0Guide:
-    """LLM 只读表头 → 输出字段映射指引"""
+    """LLM 只读表头 -> 输出字段映射指引"""
     tables: list[TableGuide] = []
     sheet_map = {
         "资产负债表": raw_doc.financial_data.balance_sheet,
@@ -77,14 +76,14 @@ def run_semantic_guide(raw_doc: RawDocument) -> B0Guide:
 
 
 def _process_one_table(table_name: str, rows: list[RawTableRow]) -> Optional[TableGuide]:
-    """处理一张报表：布局检测 → 表头解析 → LLM/规则字段映射"""
+    """处理一张报表: 布局检测 -> 表头解析 -> LLM/规则字段映射"""
     # 1. 检测布局方向
     is_row_major = _detect_layout(rows)
 
     # 2. 提取多级表头
     header_info = _parse_multi_level_header(rows, is_row_major)
 
-    # 3. 字段映射（LLM 识别，失败则异常传播——不做降级）
+    # 3. 字段映射 (LLM 识别，失败则异常传播——不做降级) 
     return _llm_guide(table_name, header_info, rows, is_row_major)
 
 
@@ -95,17 +94,17 @@ def _process_one_table(table_name: str, rows: list[RawTableRow]) -> Optional[Tab
 def _detect_layout(rows: list[RawTableRow]) -> bool:
     """检测表格是行式(row_major)还是列式(column_major)
 
-    行式（绝大多数中国年报）：
+    行式 (绝大多数中国年报) : 
       列: 项目 | 期末余额 | 期初余额
       行: 货币资金 | 100 | 90
            应收账款 | 50  | 45
 
-    列式（某些银行/港股）：
+    列式 (某些银行/港股) : 
       列: 项目 | 2024 | 2023
       行: 利息净收入 | 100 | 90
            手续费收入  | 30  | 25
 
-    判断：列数≥6 → 行式，列数≤3 → 列式
+    判断: 列数>=6 -> 行式，列数<=3 -> 列式
     """
     if not rows:
         return True
@@ -123,7 +122,7 @@ def _parse_multi_level_header(
 ) -> dict:
     """解析多级合并表头，返回结构化信息
 
-    输入（典型 3 行表头）：
+    输入 (典型 3 行表头) : 
       行0: |  资产        |   期末余额     |   期初余额     |
       行1: |  项目        | 合并   母公司  | 合并   母公司  |
 
@@ -140,7 +139,7 @@ def _parse_multi_level_header(
       }
     """
     max_rows = min(len(rows), 10)
-    # 找数据起始行：行式表格的数据通常在第 2~5 行开始
+    # 找数据起始行: 行式表格的数据通常在第 2~5 行开始
     data_start = _find_data_start(rows[:max_rows], is_row_major)
 
     # 表头行
@@ -155,7 +154,7 @@ def _parse_multi_level_header(
     report_type = _detect_report_type(header_text)
 
     # 确定科目列和数据列
-    field_col_idx = 0 if is_row_major else None  # 行式：科目在第0列
+    field_col_idx = 0 if is_row_major else None  # 行式: 科目在第0列
     value_col_indices = _find_value_columns(header_rows) if is_row_major else []
 
     return {
@@ -171,14 +170,17 @@ def _parse_multi_level_header(
 
 
 def _find_data_start(rows: list[RawTableRow], is_row_major: bool) -> int:
-    """找数据起始行：跳过表头"""
+    """找数据起始行: 跳过表头"""
     header_keywords = {"项目", "科目", "指标", "报表项目", "行次", "Items", "Item", "#"}
     for i, row in enumerate(rows):
         cols = row.columns
         row_text = " ".join(str(v) for v in cols.values())
-        # 表头特征：含关键词 且 不含数字
-        has_digit = any(re.search(r'\d', str(v)) for v in cols.values())
-        is_header = any(kw in row_text for kw in header_keywords) and not has_digit
+        # 取第 0 列 (科目列) 的值判断是否含数字——日期列不算
+        field_col = str(cols.get("col_0", ""))
+        field_has_digit = bool(re.search(r'\d', field_col))
+        # 整行其他列可能含年份 (如"2025年12月31日") ，这些不算是数据行特征
+        # 表头特征: 科目列含关键词 且 科目列无数字
+        is_header = any(kw in row_text for kw in header_keywords) and not field_has_digit
         if not is_header:
             return i
     return min(3, len(rows))  # 默认前 3 行为表头
@@ -222,9 +224,26 @@ def _llm_guide(
 ) -> TableGuide:
     from llm.client import LLMClient
     client = LLMClient()
+
+    # 提取全部唯一原始字段名 (从 col_0，表头之后) ，让 LLM 做标准名映射
+    # 最多 50 个字段，覆盖三大报表全部关键行；超过会导致 LLM 输出被截断
+    sample_field_names = []
+    for row in all_rows[header_info["data_start_row"]:]:
+        raw_name = str(row.columns.get("col_0", "")).strip()
+        if raw_name and raw_name not in sample_field_names:
+            sample_field_names.append(raw_name)
+        if len(sample_field_names) >= 100:
+            break
+
     response = client.chat(
         "b0_semantic_guide",
-        {"table_headers": f"报表: {table_name}\n布局: {header_info['layout']}\n{header_info['header_text']}"},
+        {
+            "table_headers": f"报表: {table_name}\n布局: {header_info['layout']}\n{header_info['header_text']}\n\n"
+                             f"原始字段名列表 (前{len(sample_field_names)}个) :\n" +
+                             "\n".join(f"  {i+1}. {name}" for i, name in enumerate(sample_field_names))
+        },
+        temperature=0.0,
+        max_tokens=16384,
     )
     data = _parse_llm_response(str(response) if not isinstance(response, str) else response)
 
@@ -237,12 +256,13 @@ def _llm_guide(
     field_mappings = []
     for fm in data.get("field_mapping", []):
         loc = fm.get("location", {})
+        raw_name = fm.get("raw_name", "")
         field_mappings.append(FieldMapping(
-            raw_name=fm.get("raw_name", ""),
-            standard_name=fm.get("standard_name", ""),
+            raw_name=raw_name,
+            standard_name=fm.get("standard_name", raw_name),
             row_index=loc.get("row_start", 0),
             col_index=loc.get("col_index", 0),
-            unit=fm.get("unit", header_info["unit"]),
+            unit=fm.get("unit") or header_info["unit"],
             is_negative=fm.get("is_negative", False),
         ))
 
@@ -264,6 +284,8 @@ def _parse_llm_response(raw: str) -> dict:
         if m:
             try:
                 return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                pass
-        return {}
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"LLM 返回的 JSON 不完整（可能被截断）: {e}"
+                ) from e
+        raise ValueError("LLM 返回的内容不是有效 JSON")

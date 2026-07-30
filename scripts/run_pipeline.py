@@ -1,30 +1,37 @@
 """
 ==========================================================
- scripts/run_pipeline.py — 命令行入口：运行完整分析流水线
+ scripts/run_pipeline.py — 命令行入口: 运行完整分析流水线
 ==========================================================
 
 用户的唯一入口脚本。通过命令行参数控制流水线行为。
 
-核心功能：
-1. 指定要分析的 PDF 文件路径（必填）
-2. 指定报告输出目录（可选，默认 data/outputs/）
-3. 从指定步骤开始运行（可选，调试用）
-4. 跳过 LLM 调用（可选，复用缓存时用）
+核心功能: 
+1. 指定要分析的 PDF 文件路径 (必填) 
+2. 指定报告输出目录 (可选，默认 data/outputs/) 
+3. 从指定步骤开始运行 (可选，调试用) 
+4. 跳过 LLM 调用 (可选，复用缓存时用) 
 
-使用方式：
+使用方式: 
     # 基本用法
     python scripts/run_pipeline.py --pdf data/raw/600519_2024.pdf
 
-    # 从 C 层开始（跳过之前步骤）
+    # 从 C 层开始 (跳过之前步骤) 
     python scripts/run_pipeline.py --pdf xxx.pdf --from layer_c
 
-    # 不调 LLM（用缓存数据）
+    # 不调 LLM (用缓存数据) 
     python scripts/run_pipeline.py --pdf xxx.pdf --no-llm
 """
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+# Windows GBK 终端兼容
+if sys.stdout.encoding and sys.stdout.encoding.lower() in ("gbk", "gb2312", "gb18030"):
+    import contextlib
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 from pipeline.orchestrator import Orchestrator
 
@@ -56,12 +63,26 @@ def main():
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{pdf_path.stem}_report.json"
+    output_stem = pdf_path.stem
 
-    with open(output_path, "w", encoding="utf-8") as f:
+    # 保存 JSON
+    json_path = output_dir / f"{output_stem}_report.json"
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(report.model_dump(), f, ensure_ascii=False, indent=2)
+    print(f"✅ JSON 报告: {json_path}")
 
-    print(f"✅ 分析完成，报告已保存: {output_path}")
+    # 保存 Markdown
+    try:
+        from layers.layer_e_output.e2_report_gen import render_to_markdown
+        md_content = render_to_markdown(report)
+        md_path = output_dir / f"{output_stem}_report.md"
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(md_content)
+        print(f"✅ Markdown 报告: {md_path}")
+    except Exception as e:
+        print(f"⚠️ Markdown 渲染失败 (非阻断): {e}")
+
+    print(f"🎯 分析完成")
 
 
 if __name__ == "__main__":

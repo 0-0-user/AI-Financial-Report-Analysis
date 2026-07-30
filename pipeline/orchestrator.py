@@ -3,30 +3,32 @@
  pipeline/orchestrator.py — 主调度器
 ==========================================================
 
-按标准顺序调度各层执行：0 → A → B → B+ → C → D → E。
+按标准顺序调度各层执行: 0 -> A -> B -> B+ -> C -> D -> E。
 每一层的输出自动存入 PipelineContext，供下一层读取。
 
 如果某一步失败或抛出异常，流水线会立即终止并返回错误报告。
 不允许跳过任何步骤——严格执行，失败即终止。
 
-使用方式：
+使用方式: 
     orch = Orchestrator()
     report = orch.run("年报.pdf")
 """
 
 import logging
 
+logger = logging.getLogger(__name__)
+
 from pipeline.context import PipelineContext
 from pipeline.step_registry import registry
 
-# 导入各层触发 @registry.register 注册（必须在首次使用 registry 之前）
+# 导入各层触发 @registry.register 注册 (必须在首次使用 registry 之前) 
 import layers  # noqa: F401
 
 from schemas.report import Report, OverallAssessment, ScoreBreakdown, PeerComparison
 
 
 class Orchestrator:
-    """流水线引擎，调度各层执行（不允许跳过，失败即终止）"""
+    """流水线引擎，调度各层执行 (不允许跳过，失败即终止) """
 
     def __init__(self):
         self._step_order = [
@@ -46,7 +48,7 @@ class Orchestrator:
         ctx._pdf_path = pdf_path
 
         for step_name in self._step_order:
-            # 前置依赖检查：缺字段则直接终止
+            # 前置依赖检查: 缺字段则直接终止
             missing = registry.check_requirements(step_name, ctx)
             if missing:
                 ctx.errors.append(

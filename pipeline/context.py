@@ -7,12 +7,12 @@ PipelineContext 是一个贯穿全流程的"数据背包"。
 每一层执行完毕后，将输出结果存入 context 中对应的字段。
 下一层执行时，从 context 读取需要的输入数据。
 
-这种设计的好处：
+这种设计的好处: 
 - 每一层只需要关注自己的输入/输出，不需要知道其他层的细节
-- 方便调试：可以打印整个 context 查看中间结果
-- 支持跳过：调试时可以只跑某几层
+- 方便调试: 可以打印整个 context 查看中间结果
+- 支持跳过: 调试时可以只跑某几层
 
-使用方式：
+使用方式: 
     ctx = PipelineContext()
     ctx.raw_doc = RawDocument(...)   # 第0层写
     ctx.tags = CompanyTags(...)      # A层写
@@ -61,7 +61,7 @@ class PipelineContext:
     score: Optional[ScoreBreakdown] = None
     report: Optional[Report] = None
 
-    # 多年财务原始数据（供 E2 图表使用，由 A2 层填充）
+    # 多年财务原始数据 (供 E2 图表使用，由 A2 层填充) 
     multi_year_financials: Optional[dict[str, list[dict]]] = None
     multi_year_company_names: Optional[dict[str, str]] = None
 

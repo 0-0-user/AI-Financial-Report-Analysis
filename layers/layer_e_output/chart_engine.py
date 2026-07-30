@@ -1,6 +1,6 @@
-"""E2层：图表引擎——matplotlib 绘制8张独立折线图
+"""E2层: 图表引擎——matplotlib 绘制8张独立折线图
 
-为模块0（宏观事实）生成 8 张 PNG 折线图：
+为模块0 (宏观事实) 生成 8 张 PNG 折线图: 
 横轴=年份，5条折线=目标公司+top5同行，独立图片。
 """
 
@@ -11,53 +11,53 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ── 8 张图的配置 ──
+# ── 8 张图的配置 (列名=东方财富 API 英文缩写) ──
 CHART_CONFIGS = [
     {
         "name": "销售毛利率",
-        "column": "销售毛利率(%)",
+        "column": "XSMLL",
         "filename": "chart_01_gross_margin.png",
         "unit": "%",
     },
     {
         "name": "销售净利率",
-        "column": "销售净利率(%)",
+        "column": "XSJLL",
         "filename": "chart_02_net_profit_margin.png",
         "unit": "%",
     },
     {
         "name": "总资产周转率",
-        "column": "总资产周转率(次)",
+        "column": "TOAZZL",
         "filename": "chart_03_asset_turnover.png",
         "unit": "次",
     },
     {
         "name": "资产负债率",
-        "column": "资产负债率(%)",
+        "column": "ZCFZL",
         "filename": "chart_04_debt_ratio.png",
         "unit": "%",
     },
     {
         "name": "主营业务收入增长率",
-        "column": "主营业务收入增长率(%)",
+        "column": "YYZSRGDHBZC",
         "filename": "chart_05_revenue_growth.png",
         "unit": "%",
     },
     {
         "name": "经营现金流与净利润比",
-        "column": "经营现金净流量与净利润的比率(%)",
+        "column": "NCO_NETPROFIT",
         "filename": "chart_06_cash_to_profit.png",
-        "unit": "%",
+        "unit": "",
     },
     {
         "name": "净资产收益率(ROE)",
-        "column": "净资产收益率(%)",
+        "column": "ROEJQ",
         "filename": "chart_07_roe.png",
         "unit": "%",
     },
     {
         "name": "流动比率",
-        "column": "流动比率",
+        "column": "LD",
         "filename": "chart_08_current_ratio.png",
         "unit": "",
     },
@@ -86,7 +86,7 @@ def _setup_chinese_font():
                 plt.rcParams["axes.unicode_minus"] = False
                 logger.info(f"使用中文字体: {fp}")
                 return
-        # 回退：让 matplotlib 自动找中文字体
+        # 回退: 让 matplotlib 自动找中文字体
         plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "SimSun", "WenQuanYi Micro Hei"]
         plt.rcParams["axes.unicode_minus"] = False
     except Exception as e:
@@ -108,7 +108,7 @@ def _draw_single_chart(
 
     fig, ax = plt.subplots(figsize=(10, 5.5))
 
-    # 绘制目标公司折线（粗红）
+    # 绘制目标公司折线 (粗红) 
     valid_x = [i for i, v in enumerate(target_values) if v is not None]
     valid_y = [target_values[i] for i in valid_x]
     valid_year_labels = [years[i] for i in valid_x]
@@ -120,7 +120,7 @@ def _draw_single_chart(
         label=f"★ {target_name}", zorder=5,
     )
 
-    # 绘制同行折线（灰色系）
+    # 绘制同行折线 (灰色系) 
     for idx, peer in enumerate(peer_data):
         pv = peer["values"]
         valid_px = [i for i, v in enumerate(pv) if v is not None]
@@ -188,7 +188,7 @@ def generate_all_charts(
     for code, records in multi_year_data.items():
         indexed[code] = {rec.get("year", ""): rec for rec in records if "year" in rec}
 
-    # 收集所有可用年份（按年份排序）
+    # 收集所有可用年份 (按年份排序) 
     all_years: set[str] = set()
     for code, year_data in indexed.items():
         all_years.update(year_data.keys())
@@ -198,7 +198,7 @@ def generate_all_charts(
         logger.warning("无可用年份数据，跳过图表生成")
         return []
 
-    # 确定目标公司 + top5 同行（multi_year_data 中除 target 外的前5个）
+    # 确定目标公司 + top5 同行 (multi_year_data 中除 target 外的前5个) 
     peer_codes = [c for c in multi_year_data if c != target_stock_code][:5]
 
     result = []
@@ -227,7 +227,7 @@ def generate_all_charts(
             for p in peer_data
         )
         if not has_target and not has_peer:
-            logger.debug(f"  跳过 {cfg['name']}：无数据")
+            logger.debug(f"  跳过 {cfg['name']}: 无数据")
             continue
 
         fname = _draw_single_chart(

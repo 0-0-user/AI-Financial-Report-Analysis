@@ -1,16 +1,16 @@
-"""第0层：文档切分器 — 将PDF原始提取结果切分为四大区块
+"""第0层: 文档切分器 — 将PDF原始提取结果切分为四大区块
 
-切分策略（按优先级）：
-1. 基于章节标题关键词匹配（主路径）
-2. 基于页码范围估算（降级方案，适用于标题不标准的年报）
+切分策略 (按优先级) : 
+1. 基于章节标题关键词匹配 (主路径) 
+2. 基于页码范围估算 (降级方案，适用于标题不标准的年报) 
 
-四大区块及流向：
-- financial_data    → B 层（提取数值）
-- management_discussion → D 层（查找解释）
-- footnotes         → D 层（查找附注）
-- company_overview  → A 层（打标签）
+四大区块及流向: 
+- financial_data    -> B 层 (提取数值) 
+- management_discussion -> D 层 (查找解释) 
+- footnotes         -> D 层 (查找附注) 
+- company_overview  -> A 层 (打标签) 
 
-设计约束：
+设计约束: 
 - 不涉及 LLM，纯规则引擎
 - 所有正则可配置
 """
@@ -25,30 +25,29 @@ logger = logging.getLogger(__name__)
 class DocumentChunker:
     """根据章节标题规则，将提取结果切分为四大区块"""
 
-    # 章节标题关键词（按优先级排列，越靠前越可靠）
+    # 章节标题关键词 (按优先级排列，越靠前越可靠) 
+    #
+    # 重要: A 股年报中财务关键词 ("资产负债表""利润表"等) 会在目录+审计报告开头
+    # 多次出现，导致误匹。固定策略: 
+    #   1. 用章节编号模式 ("二、财务报表""第十节 财务报告") 定位实际财务章节起始
+    #   2. 前 N 页 (目录页) 的匹配自动忽略
+    #   3. 降级方案: 无匹配时按经验规则估算
     SECTION_PATTERNS = {
         "financial_data": [
-            # 三大报表的明确标记
-            r"合并资产负债表",
-            r"资产负债表",
-            r"合并利润表",
-            r"利润表",
-            r"合并现金流量表",
-            r"现金流量表",
-            r"财务报表(?!附注)",  # "财务报表"但不包括"财务报表附注"
-            r"审计报告",
+            # 实际财务报表章节标题 ("二、财务报表 合并资产负债表"，不在目录/审计引言段) 
+            r"二、财务报表",
+            r"财务报表\s*\n+\s*合并资产负债表",
         ],
         "management_discussion": [
-            r"管理层讨论与分析",
+            r"第三节\s*管理层讨论与分析",
+            r"第[三四五六七八九十]+节\s*管理层讨论与分析",
             r"经营情况讨论与分析",
             r"董事会报告",
             r"管理层报告",
-            r"经营情况回顾",
         ],
         "footnotes": [
             r"财务报表附注",
             r"会计报表附注",
-            r"附注",
             r"财务报告说明",
         ],
         "company_overview": [
@@ -59,6 +58,9 @@ class DocumentChunker:
             r"主要会计数据",
         ],
     }
+
+    # 目录区页码上限: 页码 <= 此值的匹配忽略 (目录/审计引言段的误拦) 
+    _TOC_PAGE_LIMIT = 10
 
     # 用于从文本中提取公司名和股票代码
     COMPANY_NAME_PATTERNS = [
@@ -89,7 +91,7 @@ class DocumentChunker:
         Returns:
             dict 可直接用于 RawDocument(**chunked)
         """
-        # 合并所有页面的文本为一个字符串（保留页码标记）
+        # 合并所有页面的文本为一个字符串 (保留页码标记) 
         full_text = self._build_full_text()
         # 按章节标题切分页码范围
         page_ranges = self._identify_sections(full_text)
@@ -152,6 +154,9 @@ class DocumentChunker:
 
         for section, patterns in self.SECTION_PATTERNS.items():
             for page_num, text in page_texts:
+                # 目录页 (前 N 页) 的匹配大概率是目录/审计引言，跳过
+                if page_num <= self._TOC_PAGE_LIMIT:
+                    continue
                 for pattern in patterns:
                     if re.search(pattern, text):
                         found_starts.append((section, page_num))
@@ -167,9 +172,25 @@ class DocumentChunker:
         section_order = ["company_overview", "financial_data", "management_discussion", "footnotes"]
         last_page = max(p for p, _ in page_texts) if page_texts else 0
 
-        for i, (section, start_page) in enumerate(found_starts):
-            if i + 1 < len(found_starts):
-                end_page = found_starts[i + 1][1] - 1
+        # 用有序字典: 按 section_order 的顺序，从 found_starts 取各 section 的首个匹配
+        start_map: dict[str, int] = {}
+        for section in section_order:
+            matches = [(s, p) for (s, p) in found_starts if s == section]
+            if matches:
+                start_map[section] = matches[0][1]
+
+        # 按起止页排序 (与 section_order 无关，纯按页码) 
+        sorted_sections = sorted(start_map.items(), key=lambda x: x[1])
+
+        for i, (section, start_page) in enumerate(sorted_sections):
+            if i + 1 < len(sorted_sections):
+                next_section, next_start = sorted_sections[i + 1]
+                # 如果下一区段起始页与当前重叠或小于当前起止，修正
+                if next_start <= start_page:
+                    # 跨越到文档末尾
+                    end_page = last_page
+                else:
+                    end_page = next_start - 1
             else:
                 end_page = last_page
             ranges[section] = (start_page, end_page)
@@ -190,7 +211,7 @@ class DocumentChunker:
         first_page = page_texts[0][0]
         last_page = page_texts[-1][0]
 
-        # 经验规则：
+        # 经验规则: 
         if section == "company_overview":
             return (first_page, min(first_page + 10, last_page))
         elif section == "financial_data":
@@ -213,25 +234,43 @@ class DocumentChunker:
     def _extract_financial_data(
         self, page_range: Optional[tuple[int, int]]
     ) -> dict:
-        """提取财务数据（三大报表原始 OCR 表格）
+        """提取财务数据 (三大报表原始 OCR 表格)
+
+        v3: LLM 分类表格，不设降级。
 
         Returns:
             {"balance_sheet": [RawTableRow], "income_statement": [...], "cashflow_statement": [...]}
         """
         tables = self._get_tables_in_range(page_range)
+        if not tables:
+            return {"balance_sheet": [], "income_statement": [], "cashflow_statement": []}
 
-        balance_sheet = []
-        income_statement = []
-        cashflow_statement = []
+        # LLM 分类：对每张表判断属于哪个报表
+        classifications = self._classify_tables_with_llm(tables)
 
-        for table in tables:
+        result: dict[str, list[dict]] = {
+            "balance_sheet": [],
+            "income_statement": [],
+            "cashflow_statement": [],
+        }
+
+        for i, table in enumerate(tables):
             page_num = table.get("page_number", 0)
             rows = table.get("rows", [])
             if not rows or len(rows) < 2:
                 continue
 
-            # 根据表头关键词分类
-            header_text = " ".join(str(c) for c in rows[0] if c).lower()
+                # 确定分类: 必须来自 LLM，不设降级
+            table_id = f"table_{i}"
+            stype = classifications.get(table_id)
+            if stype == "other":
+                continue
+            if stype not in result:
+                raise RuntimeError(
+                    f"LLM 未分类表格 table_{i} (第{page_num}页, 表头: "
+                    f"{' '.join(str(c) for c in (rows[0] if rows else [])[:4])[:80]})"
+                )
+
             typed_rows = [
                 {
                     "row_index": i,
@@ -240,22 +279,81 @@ class DocumentChunker:
                 }
                 for i, row in enumerate(rows)
             ]
+            result[stype].extend(typed_rows)
 
-            if any(kw in header_text for kw in ["资产", "负债", "所有者权益", "balance sheet"]):
-                balance_sheet.extend(typed_rows)
-            elif any(kw in header_text for kw in ["利润", "收入", "成本", "费用", "income"]):
-                income_statement.extend(typed_rows)
-            elif any(kw in header_text for kw in ["现金", "cash flow", "流量"]):
-                cashflow_statement.extend(typed_rows)
-            else:
-                # 无法判断的归入资产负债表（最常见）
-                balance_sheet.extend(typed_rows)
+        return result
 
-        return {
-            "balance_sheet": balance_sheet,
-            "income_statement": income_statement,
-            "cashflow_statement": cashflow_statement,
-        }
+    def _classify_tables_with_llm(self, tables: list[dict]) -> dict[str, str]:
+        """调用 LLM 对 MinerU 财务表格进行报表类型分类
+
+        输入: tables (列表, 每项含 page_number 和 rows)
+        输出: {"table_0": "balance_sheet", "table_1": "income_statement", ...}
+        """
+        valid_tables = []
+        for i, tbl in enumerate(tables):
+            rows = tbl.get("rows", [])
+            if not rows or len(rows) < 2:
+                continue
+            # 取表头前 2 行（足够判断报表类型）
+            header_lines = []
+            for r in rows[:2]:
+                line = " | ".join(str(c) for c in r if c)
+                if line:
+                    header_lines.append(line)
+            if not header_lines:
+                continue
+            valid_tables.append({
+                "id": f"table_{i}",
+                "page_idx": tbl.get("page_number", 0),
+                "title": rows[0][0] if rows[0] else "",
+                "header_text": " // ".join(header_lines)[:300],
+            })
+
+        if not valid_tables:
+            logger.warning("financial_data 范围内无有效表格，跳过 LLM 分类")
+            return {}
+
+        from llm.client import LLMClient
+        client = LLMClient()
+        response = client.chat(
+            "b0_table_localization",
+            {"tables": valid_tables},
+            temperature=0.0,
+        )
+        result = self._parse_llm_classification(str(response))
+        if not result:
+            raise RuntimeError(
+                f"LLM 表分类返回空结果，无法为 {len(valid_tables)} 张表分配报表类型"
+            )
+
+        matched = sum(1 for v in result.values() if v in ("balance_sheet", "income_statement", "cashflow"))
+        logger.info(
+            f"LLM 分类完成: {len(result)} 张表, {matched} 张归属核心报表"
+        )
+        return result
+
+    @staticmethod
+    def _parse_llm_classification(raw: str) -> dict[str, str]:
+        """解析 LLM 返回的 JSON 分类结果"""
+        import json
+        import re
+
+        # 尝试提取 JSON
+        m = re.search(r'\{[\s\S]*\}', raw)
+        if m:
+            try:
+                data = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                return {}
+
+            classifications = data.get("classifications", [])
+            if isinstance(classifications, list):
+                return {
+                    item["table_id"]: item["statement_type"]
+                    for item in classifications
+                    if isinstance(item, dict) and "table_id" in item and "statement_type" in item
+                }
+        return {}
 
     def _extract_management_discussion(
         self, page_range: Optional[tuple[int, int]]
@@ -277,9 +375,9 @@ class DocumentChunker:
             subsections = re.split(
                 r'\n(?=(?:[一二三四五六七八九十]+[、.]|'
                 r'(?:\d+[\.、])|'
-                r'(?:（[一二三四五六七八九十]+）)|'
-                r'(?:[A-Z][一-鿿]+[：:])|'
-                r'[\(（]\d+[\)）]))',
+                r'(?:\([一二三四五六七八九十]+\))|'
+                r'(?:[A-Z][一-鿿]+:)|'
+                r'\(\d+\)))',
                 text,
             )
 
@@ -314,10 +412,10 @@ class DocumentChunker:
                 continue
 
             text = page.get("text", "")
-            # 附注通常有编号，如 "1." "（一）" "注1"
+            # 附注通常有编号，如 "1." " (一) " "注1"
             note_pattern = re.compile(
                 r'(?:^|\n)((?:注\d+|附注[一二三四五六七八九十\d]+|'
-                r'[\(（][一二三四五六七八九十\d]+[\)）]|'
+                r'(?:[\(][一二三四五六七八九十\d]+[\)])|'
                 r'\d+\.[  ]+[^\d])[^\n]*)',
                 re.MULTILINE,
             )
@@ -390,7 +488,7 @@ class DocumentChunker:
             "file_name": meta.get("file_name", ""),
             "page_count": meta.get("page_count", 0),
             "report_year": meta.get("report_year"),
-            "extract_tool": meta.get("extract_tool", "pdfplumber"),
+            "extract_tool": meta.get("extract_tool", "mineru"),
             "extract_date": meta.get("extract_date", ""),
         }
 

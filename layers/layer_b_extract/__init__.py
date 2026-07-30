@@ -1,4 +1,4 @@
-"""B层：提取财务数据"""
+"""B层: 提取财务数据"""
 
 from pipeline.step_registry import registry
 from pipeline.context import PipelineContext
@@ -6,7 +6,7 @@ from pipeline.context import PipelineContext
 
 @registry.register("layer_b", requires=["raw_doc"])
 def run(ctx: PipelineContext) -> None:
-    """B0 → B1 顺序执行"""
+    """B0 -> B1 顺序执行"""
     from .b0_semantic_guide import run_semantic_guide
     from .b1_extractors import run_extraction
     from .b1_validators import run_validation

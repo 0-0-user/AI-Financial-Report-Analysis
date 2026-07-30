@@ -1,14 +1,14 @@
-"""第0层：OCR 文本纠错器 — 修复 PDF 扫描件中常见的识别错误
+"""第0层: OCR 文本纠错器 — 修复 PDF 扫描件中常见的识别错误
 
-适用范围：中文财务文本的 OCR 后处理
+适用范围: 中文财务文本的 OCR 后处理
 
-常见错误类型：
-1. 形近字：资釐→资金、负偾→负债、收亼→收入
-2. 数字混淆：0↔O↔o、1↔l↔I、5↔S、7↔T
-3. 漏字/多字：合并报表→合报表、资产负债→资产负债资
-4. 标点/空格：被 OCR 误加或遗漏的标点
+常见错误类型: 
+1. 形近字: 资釐->资金、负偾->负债、收亼->收入
+2. 数字混淆: 0↔O↔o、1↔l↔I、5↔S、7↔T
+3. 漏字/多字: 合并报表->合报表、资产负债->资产负债资
+4. 标点/空格: 被 OCR 误加或遗漏的标点
 
-设计约束：
+设计约束: 
 - 在 chunker 切分后、merger 合并前运行
 - 只修正明显的 OCR 错误，不做语义修改
 """
@@ -19,7 +19,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ── 形近字纠错：dict + 编译正则 → 单次扫描 O(text_length) ──
+# ── 形近字纠错: dict + 编译正则 -> 单次扫描 O(text_length) ──
 _CORRECTION_MAP: dict[str, str] = {
     "资釐": "资金", "负偾": "负债", "负渍": "负债", "收亼": "收入",
     "攴出": "支出", "资卢": "资产", "权盉": "权益", "利闰": "利润",
@@ -34,12 +34,12 @@ _CORRECTION_MAP: dict[str, str] = {
     "度初": "期初", "年末": "年末",
     "OO": "00", "o0": "00", "l,": "1,", "S,": "5,", "T,": "7,",
 }
-# 降序排键 → 长匹配优先
+# 降序排键 -> 长匹配优先
 _SORTED_KEYS = sorted(_CORRECTION_MAP.keys(), key=len, reverse=True)
 _CORRECTION_RE = re.compile('|'.join(re.escape(k) for k in _SORTED_KEYS))
 
 # ── 数字格式修正 ──
-_NUMBER_FIXES_RE = re.compile(r'[–—]\s*(\d)')  # 负号变连字符: –500 → -500
+_NUMBER_FIXES_RE = re.compile(r'[–—]\s*(\d)')  # 负号变连字符: –500 -> -500
 
 # ── 单位行识别 ──
 _UNIT_LINE_PATTERN = re.compile(
@@ -49,10 +49,10 @@ _UNIT_LINE_PATTERN = re.compile(
 
 
 def correct_ocr_errors(text: str) -> str:
-    """OCR 文本纠错：单次扫描 O(text_length)
+    """OCR 文本纠错: 单次扫描 O(text_length)
 
-    优化：编译正则 dict callback 替代逐个 str.replace。
-    40+ 个模式一次匹配完成，不再 O(n×m)。
+    优化: 编译正则 dict callback 替代逐个 str.replace。
+    40+ 个模式一次匹配完成，不再 O(nxm)。
     """
     if not text:
         return text
@@ -65,7 +65,7 @@ def correct_ocr_errors(text: str) -> str:
 
 
 def correct_row_text(row_dict: dict) -> dict:
-    """对一行 OCR 数据（如 RawTableRow）的所有文本列进行纠错
+    """对一行 OCR 数据 (如 RawTableRow) 的所有文本列进行纠错
 
     输入: {"row_index": 0, "columns": {"col_0": "货币资釐", "col_1": "12,345.67"}, ...}
     输出: 同结构，文本值已纠错

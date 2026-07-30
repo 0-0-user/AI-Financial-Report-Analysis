@@ -1,12 +1,12 @@
-"""A2层：财务数字画像匹配同行——纯代码向量相似度
+"""A2层: 财务数字画像匹配同行——纯代码向量相似度
 
-职责：
+职责: 
 - 从同花顺行业分类 CSV 获取二级行业同行池
-- 通过 akshare 在线获取同行财务数据（内存缓存，不落盘）
-- 5 年财务数据 → 稳健标准化 → 逐维中位数合并 → 6 维连续值向量
-- 余弦相似度排序 → Top 5（E层展示）+ Top 20%（C层MAD基准）
+- 通过 akshare 在线获取同行财务数据 (内存缓存，不落盘) 
+- 5 年财务数据 -> 稳健标准化 -> 逐维中位数合并 -> 6 维连续值向量
+- 余弦相似度排序 -> Top 5 (E层展示) + Top 20% (C层MAD基准) 
 
-设计约束：
+设计约束: 
 - 纯代码实现，不涉及任何 LLM 调用
 - 数据通过 akshare 实时获取 + 内存缓存，不写磁盘文件
 - 不再经过离散等级中转，原始连续值直接标准化后做余弦相似度
@@ -15,7 +15,9 @@
 import csv
 import logging
 import math
+import os
 import statistics
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -29,29 +31,42 @@ logger = logging.getLogger(__name__)
 # ────────────────────────────────────────────
 _INDUSTRY_CSV_PATH = Path("data/industry/thf_industry_classification.csv")
 
-# 6 维特征顺序（与 FINANCIAL_DIMENSIONS 一致）
+# 6 维特征顺序 (与 FINANCIAL_DIMENSIONS 一致)
 _DIMENSION_NAMES = FINANCIAL_DIMENSIONS  # 用全局统一顺序
 
-# 维度名 → akshare 实际列名映射（修复：原映射使用了不存在的简化名）
+# 股票代码转东方财富格式: 600422 -> 600422.SH, 000001 -> 000001.SZ
+def _stock_to_em_format(stock_code: str) -> str:
+    """将纯数字股票代码转为东方财富 API 需要的带后缀格式"""
+    code = stock_code.split(".")[0].strip()
+    if code.startswith("6"):
+        return f"{code}.SH"
+    elif code.startswith(("0", "3")):
+        return f"{code}.SZ"
+    elif code.startswith("4"):
+        return f"{code}.BJ"
+    return code  # 兜底: 不加后缀
+
+# 维度名 -> 东方财富 API 实际列名映射
+# EM API 列名为英文缩写，数据来源: datacenter.eastmoney.com
 _DIMENSION_TO_AKSHARE_COLUMN = {
-    "毛利率水平": "销售毛利率(%)",
-    "净利率水平": "销售净利率(%)",
-    "总资产周转率": "总资产周转率(次)",
-    "资产负债率": "资产负债率(%)",
-    "研发费用率": "主营业务收入增长率(%)",    # 替换：原"研发费用率"在 API 中不存在
-    "销售费用率": "净资产收益率(%)",          # 替换：原"销售费用率"在 API 中不存在
+    "毛利率水平": "XSMLL",                           # 销售毛利率(%)
+    "净利率水平": "XSJLL",                           # 销售净利率(%)
+    "总资产周转率": "TOAZZL",                         # 总资产周转率(次)
+    "资产负债率": "ZCFZL",                           # 资产负债率(%)
+    "研发费用率": "YYZSRGDHBZC",                     # 替代: 营业收入同比增长率(%)
+    "销售费用率": "ROEJQ",                           # 替代: 净资产收益率-加权(%)
 }
 
-# 8 张折线图使用的指标列（E2 模块0 全量提取）
+# 8 张折线图使用的指标列 (E2 模块0 全量提取) — 东方财富列名
 _CHART_INDICATOR_COLUMNS = [
-    "销售毛利率(%)",
-    "销售净利率(%)",
-    "总资产周转率(次)",
-    "资产负债率(%)",
-    "主营业务收入增长率(%)",
-    "经营现金净流量与净利润的比率(%)",
-    "净资产收益率(%)",
-    "流动比率",
+    "XSMLL",          # 销售毛利率
+    "XSJLL",          # 销售净利率
+    "TOAZZL",         # 总资产周转率(次)
+    "ZCFZL",          # 资产负债率
+    "YYZSRGDHBZC",    # 营业收入同比增长率
+    "NCO_NETPROFIT",  # 经营现金流/净利润比
+    "ROEJQ",          # 净资产收益率-加权
+    "LD",             # 流动比率
 ]
 
 # 兼容旧引用名
@@ -62,9 +77,9 @@ _TOP_PERCENT = 0.2
 
 
 # ────────────────────────────────────────────
-# 内存缓存（仅当前会话有效）
+# 内存缓存 (仅当前会话有效) 
 # ────────────────────────────────────────────
-# key=stock_code, value=list[dict]（每元素含 6 个财务指标 + year）
+# key=stock_code, value=list[dict] (每元素含 6 个财务指标 + year) 
 _FINANCIAL_CACHE: dict[str, list[dict]] = {}
 
 
@@ -75,20 +90,20 @@ _FINANCIAL_CACHE: dict[str, list[dict]] = {}
 def run_matching(tags: CompanyTags) -> tuple[Benchmark, dict, dict]:
     """匹配相似企业并计算基准
 
-    流程（两遍扫描，砍掉等级中转）：
+    流程 (两遍扫描，砍掉等级中转) : 
         1. 从硬标签确定二级行业，获取同行池
         2. 一次性拉取目标 + 全部同行的原始财务数据
-        3. 计算 6 维稳健标准化统计量（median / IQR）
-        4. 标准化目标公司数据 → 中位数合并 → 6 维连续值向量
-        5. 标准化每家同行数据 → 中位数合并 → 6 维连续值向量
-        6. 余弦相似度排序 → Top 5 + Top 20%（MAD 基准池）
+        3. 计算 6 维稳健标准化统计量 (median / IQR) 
+        4. 标准化目标公司数据 -> 中位数合并 -> 6 维连续值向量
+        5. 标准化每家同行数据 -> 中位数合并 -> 6 维连续值向量
+        6. 余弦相似度排序 -> Top 5 + Top 20% (MAD 基准池) 
 
     Args:
         tags: A1 层输出的 CompanyTags
-              （含 hard_tags；financial_profile 由本函数从 akshare 计算）
+               (含 hard_tags；financial_profile 由本函数从 akshare 计算) 
 
     Returns:
-        Benchmark（同行列表 + 横向中位数）
+        Benchmark (同行列表 + 横向中位数) 
     """
     stock_code = tags.stock_code
     company_name = tags.company_name
@@ -127,7 +142,7 @@ def run_matching(tags: CompanyTags) -> tuple[Benchmark, dict, dict]:
         return _empty_benchmark(tags, industry_name)
 
     stats = _compute_robust_stats(all_values)
-    logger.info(f"稳健标准化统计量计算完成（{len(all_values)} 个样本点）")
+    logger.info(f"稳健标准化统计量计算完成 ({len(all_values)} 个样本点) ")
 
     # ── Phase 3: 标准化目标公司 ──
     target_year_data = raw_data[stock_code]
@@ -154,13 +169,13 @@ def run_matching(tags: CompanyTags) -> tuple[Benchmark, dict, dict]:
     peer_median = _calc_peer_median(mad_pool)
     logger.info(f"MAD 基准池 {len(mad_pool)} 家")
 
-    # ── Phase 6: 切片多年原始数据（供 E2 图表使用）──
+    # ── Phase 6: 切片多年原始数据 (供 E2 图表使用) ──
     multi_year_data: dict[str, list[dict]] = {}
     company_codes = [stock_code] + [p["stock_code"] for p in top5]
     for code in company_codes:
         if code in raw_data:
             multi_year_data[code] = raw_data[code]
-    # 附带公司名称（方便图表标注）
+    # 附带公司名称 (方便图表标注) 
     company_names: dict[str, str] = {stock_code: company_name}
     company_names.update({p["stock_code"]: p["name"] for p in top5})
 
@@ -184,7 +199,7 @@ def run_matching(tags: CompanyTags) -> tuple[Benchmark, dict, dict]:
 
 
 # ────────────────────────────────────────────
-# 行业池（CSV 查表）
+# 行业池 (CSV 查表) 
 # ────────────────────────────────────────────
 
 _INDUSTRY_CACHE: dict[str, dict] | None = None
@@ -251,15 +266,21 @@ def _load_peer_pool(industry_level2: str) -> list[dict]:
 
 
 # ────────────────────────────────────────────
-# 财务数据获取（akshare + 内存缓存）
+# 财务数据获取 (akshare + 内存缓存) 
 # ────────────────────────────────────────────
 
+_AKSHARE_TIMEOUT = 25  # 单次 akshare 请求超时秒数
+
+
 def _fetch_financial_data(stock_code: str) -> list[dict]:
-    """从 akshare 获取某公司近年财务数据，带内存缓存
+    """从 akshare 东方财富 API 获取某公司近年财务数据，带内存缓存 + 超时保护
+
+    数据源: akshare.stock_financial_analysis_indicator_em (东方财富 datacenter)
+    相比原新浪版: 更快(约0.7s)、数据更丰富(141列 vs 86列)、覆盖年份更久(1997-2026)
 
     Returns:
-        [{"year": "2022", "毛利率": 82.5, "净利率": 35.2, ...}, ...]
-        按年份降序排列（最新的在前）
+        [{"year": "2022", "XSMLL": 82.5, "XSJLL": 35.2, ...}, ...]
+        按年份降序排列 (最新的在前)
     """
     # 命中缓存
     if stock_code in _FINANCIAL_CACHE:
@@ -269,10 +290,27 @@ def _fetch_financial_data(stock_code: str) -> list[dict]:
     if norm_code in _FINANCIAL_CACHE:
         return _FINANCIAL_CACHE[norm_code]
 
-    # 尝试 akshare
+    # 转换为东方财富格式 (600422 -> 600422.SH)
+    em_code = _stock_to_em_format(norm_code)
+
+    # 尝试 akshare (带超时保护，通过线程池实现)
     try:
         import akshare as ak
-        df = ak.stock_financial_analysis_indicator(symbol=norm_code, start_year="2021")
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+
+        def _do_fetch():
+            return ak.stock_financial_analysis_indicator_em(
+                symbol=em_code, indicator="按报告期"
+            )
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(_do_fetch)
+            try:
+                df = fut.result(timeout=_AKSHARE_TIMEOUT)
+            except FutureTimeout:
+                logger.warning(f"akshare EM 获取 {em_code} 超时 (>={_AKSHARE_TIMEOUT}s)")
+                _FINANCIAL_CACHE[stock_code] = []
+                return []
 
         if df is None or df.empty:
             _FINANCIAL_CACHE[stock_code] = []
@@ -290,29 +328,49 @@ def _fetch_financial_data(stock_code: str) -> list[dict]:
         _FINANCIAL_CACHE[stock_code] = []
         return []
     except Exception as e:
-        logger.warning(f"akshare 获取 {norm_code} 失败: {e}")
+        logger.warning(f"akshare EM 获取 {em_code} 失败: {e}")
         _FINANCIAL_CACHE[stock_code] = []
         return []
 
 
 def _parse_akshare_df(df, stock_code: str) -> list[dict]:
-    """将 akshare 返回的 DataFrame 解析为统一格式
+    """将 akshare 东方财富返回的 DataFrame 解析为统一格式
 
     提取 6 维匹配维度 + 8 维图表指标的全部原始值。
-    列名校准为实际 akshare 列名。
+    EM 版列名为英文缩写 (如 XSMLL=销售毛利率, TOAZZL=总资产周转率)。
+
+    只解析年报数据 (REPORT_TYPE == "年报") 以确保年度可比性。
     """
     import pandas as pd
 
     records = []
-    # 收集所有需要的列名（去重后）
+    # 收集所有需要的列名 (去重后)
     needed_cols: set[str] = set()
     for dim_name in _DIMENSION_NAMES:
         needed_cols.add(_DIMENSION_TO_AKSHARE_COLUMN[dim_name])
     needed_cols.update(_CHART_INDICATOR_COLUMNS)
 
+    # EM 版有 REPORT_YEAR 列 (int) 和 REPORT_TYPE 列
+    has_year_col = "REPORT_YEAR" in df.columns
+    has_type_col = "REPORT_TYPE" in df.columns
+
     for _, row in df.iterrows():
-        year = str(row.get("年份", row.get("报告期", "")))
+        # 只取年报数据
+        if has_type_col:
+            report_type = str(row.get("REPORT_TYPE", ""))
+            if "年" not in report_type and "年报" not in report_type:
+                continue
+
+        # 提取年份
+        year = ""
+        if has_year_col:
+            try:
+                year = str(int(row["REPORT_YEAR"]))
+            except (ValueError, TypeError):
+                pass
         if not year:
+            year = str(row.get("REPORT_DATE", ""))[:4]
+        if not year or year == "nan":
             continue
 
         record: dict = {"year": year[:4]}
@@ -331,13 +389,23 @@ def _parse_akshare_df(df, stock_code: str) -> list[dict]:
         if has_data:
             records.append(record)
 
+    # 按年份降序排列
+    records.sort(key=lambda r: r["year"], reverse=True)
+
+    # 只保留最近 5 年数据 (足够计算基准 + 生成趋势图)
+    MAX_YEARS = 5
+    records = records[:MAX_YEARS]
+
     return records
 
 
 def _fetch_all_financial_data(
     target_code: str, peers: list[dict]
 ) -> dict[str, list[dict]]:
-    """一次性拉取目标公司 + 全部同行的原始财务数据（利用内存缓存）"""
+    """一次性拉取目标公司 + 全部同行的原始财务数据 (利用内存缓存，并发拉取) """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import functools
+
     result: dict[str, list[dict]] = {}
 
     # 目标公司
@@ -345,14 +413,24 @@ def _fetch_all_financial_data(
     if target_data:
         result[target_code] = target_data
 
-    # 全部同行
-    for peer in peers:
-        code = peer["code"]
-        data = _fetch_financial_data(code)
-        if data:
-            result[code] = data
+    # 全部同行 (并发，每家有 _AKSHARE_TIMEOUT 超时)
+    codes = [p["code"] for p in peers]
+    if not codes:
+        return result
 
-    logger.info(f"已获取 {len(result)} 家公司的原始财务数据")
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {pool.submit(_fetch_financial_data, code): code for code in codes}
+        # 逐个处理完成的结果（不设整体超时，每个 future 自带 25s 超时）
+        for fut in as_completed(futures):
+            code = futures[fut]
+            try:
+                data = fut.result()
+                if data:
+                    result[code] = data
+            except Exception as e:
+                logger.debug(f"同行 {code} 获取失败: {e}")
+
+    logger.info(f"已获取 {len(result)}/{1+len(codes)} 家公司的原始财务数据")
     return result
 
 
@@ -362,7 +440,7 @@ def _fetch_all_financial_data(
 
 
 def _extract_raw_values(financial_data: dict) -> Optional[list[float]]:
-    """从一行 akshare 数据提取 6 维原始值（不经过离散化）
+    """从一行 akshare 数据提取 6 维原始值 (不经过离散化) 
 
     Returns:
         [毛利率, 净利率, 周转率, 负债率, 营收增长率, ROE]
@@ -382,7 +460,7 @@ def _extract_raw_values(financial_data: dict) -> Optional[list[float]]:
 
 
 def _compute_robust_stats(all_values: list[list[float]]) -> dict[str, list[float]]:
-    """对 6 维数据分别计算中位数和 IQR（稳健标准化参数）
+    """对 6 维数据分别计算中位数和 IQR (稳健标准化参数) 
 
     Args:
         all_values: [[v1_dim0, v1_dim1, ...], [v2_dim0, ...], ...]
@@ -432,7 +510,7 @@ def _robust_scale_vector(
 
 
 def _merge_continuous_values(value_arrays: list[list[float]]) -> list[float]:
-    """多年连续值 → 逐维中位数合并"""
+    """多年连续值 -> 逐维中位数合并"""
     if not value_arrays:
         return [0.0] * 6
     if len(value_arrays) == 1:
@@ -448,9 +526,9 @@ def _merge_continuous_values(value_arrays: list[list[float]]) -> list[float]:
 def _normalize_merge_vector(
     year_data: list[dict], stats: dict[str, list[float]]
 ) -> list[float]:
-    """对一年或多年的原始财务数据：提取 → 标准化 → 中位数合并
+    """对一年或多年的原始财务数据: 提取 -> 标准化 -> 中位数合并
 
-    Returns: 6 维连续值向量（稳健标准化后）
+    Returns: 6 维连续值向量 (稳健标准化后) 
     """
     normalized = []
     for yr in year_data:
@@ -478,7 +556,7 @@ def _build_peer_vectors_from_raw(
 
         merged_vec = _normalize_merge_vector(year_data, stats)
 
-        # 最新年份原始财务数据（用于展示）
+        # 最新年份原始财务数据 (用于展示) 
         latest = year_data[0]
         financials = {}
         for dim in _DIMENSION_NAMES:
@@ -529,7 +607,7 @@ def _calc_peer_median(peers: list[dict]) -> dict[str, float]:
 
 
 def _empty_benchmark(tags: CompanyTags, industry: str = "") -> tuple[Benchmark, dict, dict]:
-    """返回空基准 + 空多年数据（保持与 run_matching 相同的返回签名）"""
+    """返回空基准 + 空多年数据 (保持与 run_matching 相同的返回签名) """
     name = industry or _extract_industry_level2(tags.hard_tags) or "未知行业"
     return (
         Benchmark(

@@ -37,12 +37,19 @@ messages:
         "field_mapping": [
           {
             "raw_name": "财报原始字段名",
-            "standard_name": "系统标准字段名",
+            "standard_name": "系统标准字段名（见下方清单）",
             "unit": "该字段的单位（若与整体不同）",
             "location": {"row_start": 3, "col_index": 2}
           }
         ]
       }
+
+      已知标准字段名清单（用于 standard_name）：
+      - 利润表：Revenue_Total / Operating_Profit / Net_Profit / Gross_Profit / Cost_Revenue
+      - 资产负债表：Total_Assets / Total_Liabilities / Equity_Total / Monetary_Funds / Inventory / Accounts_Receivable
+      - 现金流量表：Cash_Flow_Op / Cash_Flow_Inv / Cash_Flow_Fin / Net_Cash_Increase
+      - 通用：Revenue_Total
+      如果字段不在清单中，用中文名拼音或见名知义的英文描述。
 
   - role: user
     content: |

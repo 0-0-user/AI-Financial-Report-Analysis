@@ -1,17 +1,17 @@
-"""E2层：生成结构化报告（6 模块 + Markdown 渲染）
+"""E2层: 生成结构化报告 (6 模块 + Markdown 渲染) 
 
 接收已填好所有数据的 PipelineContext，组装最终的 Report 对象，
 并渲染为人类可读的 Markdown 文档。
 
-六个输出模块：
+六个输出模块: 
 0. 宏观事实 — 8 张折线图
 1. 综合评级与得分区间 — [Bel, Pl] 信任区间
 2. 核心异常指标清单 — B+/C 异常
-3. 解释 — D2 概率归因 + K 冲突（LLM 模板填充）
+3. 解释 — D2 概率归因 + K 冲突 (LLM 模板填充) 
 4. 总结报告 — LLM 全量语义分析
 5. 证据溯源 — 出处+页码
 
-使用方式：
+使用方式: 
     report = generate_report(ctx)
     markdown = render_to_markdown(report)
     print(markdown)
@@ -46,29 +46,29 @@ def _safe_get_k(reasoning) -> float:
 
 
 def generate_report(ctx: PipelineContext) -> Report:
-    """主入口：组装最终的结构化报告"""
-    # 模块0：生成图表
+    """主入口: 组装最终的结构化报告"""
+    # 模块0: 生成图表
     chart_configs = _build_charts(ctx)
 
-    # 模块1：信任区间
+    # 模块1: 信任区间
     trust_interval = _build_trust_interval(ctx)
 
-    # 模块1：整体研判（复用旧逻辑）
+    # 模块1: 整体研判 (复用旧逻辑) 
     overall = _build_overview(ctx, trust_interval)
 
-    # 模块2：核心异常清单
+    # 模块2: 核心异常清单
     anomalies = _build_core_anomalies(ctx)
 
-    # 模块3：解释（LLM 模板填充，失败则回退到结构化渲染）
+    # 模块3: 解释 (LLM 模板填充，失败则回退到结构化渲染) 
     explanation_text = _build_explanations_llm(ctx)
 
-    # 模块4：总结报告（LLM 全量语义分析，失败则回退）
+    # 模块4: 总结报告 (LLM 全量语义分析，失败则回退) 
     summary_text = _build_summary_llm(ctx, overall, anomalies, trust_interval)
 
-    # 模块5：证据溯源
+    # 模块5: 证据溯源
     evidence_sources = _build_evidence_sources(ctx)
 
-    # 多空逻辑栈（保留兼容）
+    # 多空逻辑栈 (保留兼容) 
     bull, bear = _build_bull_bear(ctx)
 
     report = Report(
@@ -92,7 +92,7 @@ def generate_report(ctx: PipelineContext) -> Report:
 
 
 # ════════════════════════════════════════════
-# 模块0：宏观事实（8 张折线图）
+# 模块0: 宏观事实 (8 张折线图) 
 # ════════════════════════════════════════════
 
 def _build_charts(ctx: PipelineContext) -> list[ChartConfig]:
@@ -126,12 +126,12 @@ def _build_charts(ctx: PipelineContext) -> list[ChartConfig]:
             ))
         return configs
     except Exception as e:
-        logger.warning(f"图表生成失败（非阻断）: {e}")
+        logger.warning(f"图表生成失败 (非阻断) : {e}")
         return []
 
 
 # ════════════════════════════════════════════
-# 模块1：信任区间 [Bel, Pl]
+# 模块1: 信任区间 [Bel, Pl]
 # ════════════════════════════════════════════
 
 def _build_trust_interval(ctx: PipelineContext) -> Optional[TrustInterval]:
@@ -161,10 +161,10 @@ def _build_trust_interval(ctx: PipelineContext) -> Optional[TrustInterval]:
     k_sum = 0.0
     for d in details:
         k_sum += d.k_value
-        # 从 mass_final 读取 m(Θ) 的近似值：
-        # 如果 bel != pl → 有不确定性 → m_θ > 0
-        # 简单估计：mθ ≈ |score_pl - score_bel| / (2 * |w_phe * delta|)...
-        # 实际上我们用更简单的方式：mθ ≈ (d.score_pl - d.anomaly_score) / (w_phe * delta * 5)
+        # 从 mass_final 读取 m(Θ) 的近似值: 
+        # 如果 bel != pl -> 有不确定性 -> m_θ > 0
+        # 简单估计: mθ ~ |score_pl - score_bel| / (2 * |w_phe * delta|)...
+        # 实际上我们用更简单的方式: mθ ~ (d.score_pl - d.anomaly_score) / (w_phe * delta * 5)
         # 但这个太 hacky 了。从异常分数反推 mθ 不准确。
         # 对于展示，我们用 bel/pl 的相对差异来表示不确定性层级。
         m_theta_sum += _estimate_m_theta(d)
@@ -184,8 +184,8 @@ def _estimate_m_theta(detail: AnomalyScoreDetail) -> float:
     diff = abs(detail.score_pl - detail.score_bel)
     if diff < 1e-6 or abs(detail.w_phe * detail.delta) < 1e-6:
         return 0.0
-    # diff ≈ 2 × w_phe × delta × m_θ × 5 / known
-    # 反推 m_θ ≈ diff / (2 * w_phe * delta * 5)
+    # diff ~ 2 x w_phe x delta x m_θ x 5 / known
+    # 反推 m_θ ~ diff / (2 * w_phe * delta * 5)
     estimated = diff / (2 * detail.w_phe * detail.delta * 5)
     return min(max(estimated, 0.0), 1.0)
 
@@ -194,7 +194,7 @@ def _build_overview(
     ctx: PipelineContext,
     trust_interval: Optional[TrustInterval],
 ) -> OverallAssessment:
-    """模块1 上半部分：综合评级"""
+    """模块1 上半部分: 综合评级"""
     score = ctx.score.final_score if ctx.score else 0
     tier = "高置信度" if score >= 80 else "中等置信度" if score >= 60 else "低置信度"
 
@@ -213,7 +213,7 @@ def _build_overview(
 
 
 # ════════════════════════════════════════════
-# 模块2：核心异常指标清单（增强版）
+# 模块2: 核心异常指标清单 (增强版) 
 # ════════════════════════════════════════════
 
 def _build_core_anomalies(ctx: PipelineContext) -> list[CoreAnomaly]:
@@ -303,13 +303,13 @@ def _severity_label(severity) -> str:
 
 
 # ════════════════════════════════════════════
-# 模块3：解释（LLM 模板格式化）
+# 模块3: 解释 (LLM 模板格式化) 
 # ════════════════════════════════════════════
 
 def _build_explanations_llm(ctx: PipelineContext) -> Optional[str]:
     """LLM 按模板格式化异常解释文本
 
-    LLM 失败则回退到模板渲染（非阻断）。
+    LLM 失败则回退到模板渲染 (非阻断) 。
     """
     if not ctx.reasoning_results:
         return None
@@ -382,36 +382,36 @@ def _build_explanations_llm(ctx: PipelineContext) -> Optional[str]:
         if response and str(response).strip():
             return str(response)
     except Exception as e:
-        logger.warning(f"E2 模块3 LLM 调用失败（使用回退模板）: {e}")
+        logger.warning(f"E2 模块3 LLM 调用失败 (使用回退模板) : {e}")
 
-    # 回退：结构化渲染
+    # 回退: 结构化渲染
     return _render_explanation_fallback(anomalies_data)
 
 
 def _render_explanation_fallback(anomalies_data: list[dict]) -> str:
-    """LLM 失败时的回退：纯模板渲染"""
+    """LLM 失败时的回退: 纯模板渲染"""
     lines = []
     for item in anomalies_data:
-        lines.append(f"### {item['indicator']}（{item['source']}层）")
+        lines.append(f"### {item['indicator']} ({item['source']}层) ")
         k = item["k_value"]
         if k > 0.6:
-            lines.append(f"> 证据冲突系数 K = {k}（两路证据存在显著分歧）")
+            lines.append(f"> 证据冲突系数 K = {k} (两路证据存在显著分歧) ")
         else:
-            lines.append(f"> 证据冲突系数 K = {k}（证据一致性较高）")
+            lines.append(f"> 证据冲突系数 K = {k} (证据一致性较高) ")
         lines.append("")
-        lines.append("原因分布：")
+        lines.append("原因分布: ")
         for c in item["causes"]:
-            lines.append(f"- {c['cause']}：{c['probability']}%")
+            lines.append(f"- {c['cause']}: {c['probability']}%")
             if c["lookup_text"]:
-                lines.append(f"  - 年报原文：{c['lookup_text'][:100]}（第{c['lookup_page']}页）[^{c['footnote_id']}]")
+                lines.append(f"  - 年报原文: {c['lookup_text'][:100]} (第{c['lookup_page']}页) [^{c['footnote_id']}]")
             if c["hypo_text"]:
-                lines.append(f"  - 推演假设：{c['hypo_text'][:100]}（来源：{c['hypo_source']}）")
+                lines.append(f"  - 推演假设: {c['hypo_text'][:100]} (来源: {c['hypo_source']}) ")
         lines.append("")
     return "\n".join(lines)
 
 
 # ════════════════════════════════════════════
-# 模块4：总结报告（LLM 全量语义分析）
+# 模块4: 总结报告 (LLM 全量语义分析) 
 # ════════════════════════════════════════════
 
 def _build_summary_llm(
@@ -477,9 +477,9 @@ def _build_summary_llm(
         if response and str(response).strip():
             return str(response)
     except Exception as e:
-        logger.warning(f"E2 模块4 LLM 调用失败（使用回退模板）: {e}")
+        logger.warning(f"E2 模块4 LLM 调用失败 (使用回退模板) : {e}")
 
-    # 回退：简单总结
+    # 回退: 简单总结
     return _render_summary_fallback(
         score, overall, trust_interval, anomalies,
     )
@@ -491,25 +491,25 @@ def _render_summary_fallback(
     trust_interval: Optional[TrustInterval],
     anomalies: list[CoreAnomaly],
 ) -> str:
-    """LLM 失败时的回退：结构化摘要"""
+    """LLM 失败时的回退: 结构化摘要"""
     lines = [
-        "## 总结报告（结构化摘要）",
+        "## 总结报告 (结构化摘要) ",
         "",
         f"综合得分 {score.final_score} / 100，{overall.confidence_tier}。",
         "",
-        f"共发现 {len(anomalies)} 项异常：",
+        f"共发现 {len(anomalies)} 项异常: ",
     ]
     for a in anomalies:
-        lines.append(f"- [{a.source}] {a.indicator}（K={a.k_value}）")
+        lines.append(f"- [{a.source}] {a.indicator} (K={a.k_value}) ")
     if trust_interval:
         lines.append("")
-        lines.append(f"不确定性区间：[{trust_interval.lower_bound}, {trust_interval.upper_bound}]")
+        lines.append(f"不确定性区间: [{trust_interval.lower_bound}, {trust_interval.upper_bound}]")
         lines.append(f"平均 m(Θ)={trust_interval.avg_m_theta}，平均 K={trust_interval.avg_k}")
     return "\n".join(lines)
 
 
 # ════════════════════════════════════════════
-# 模块5：证据溯源
+# 模块5: 证据溯源
 # ════════════════════════════════════════════
 
 def _build_evidence_sources(ctx: PipelineContext) -> list[EvidenceSource]:
@@ -541,7 +541,7 @@ def _build_evidence_sources(ctx: PipelineContext) -> list[EvidenceSource]:
                         found_lookup = True
                         break
 
-            # 路2假设（如果路1没找到匹配）
+            # 路2假设 (如果路1没找到匹配) 
             if not found_lookup and rr.hypotheses:
                 for h in rr.hypotheses:
                     hypo = getattr(h, "hypothesis", "")
@@ -569,24 +569,24 @@ def _build_evidence_sources(ctx: PipelineContext) -> list[EvidenceSource]:
 
 
 # ════════════════════════════════════════════
-# 多空逻辑栈（保留兼容）
+# 多空逻辑栈 (保留兼容) 
 # ════════════════════════════════════════════
 
 def _build_bull_bear(ctx: PipelineContext) -> tuple[list[str], list[str]]:
-    """构建多空逻辑栈（复用旧逻辑）"""
+    """构建多空逻辑栈 (复用旧逻辑) """
     bull: list[str] = []
     bear: list[str] = []
 
     if ctx.deviations:
         for dev in ctx.deviations:
             if dev.severity == "extreme":
-                bear.append(f"{dev.indicator}严重偏离同行（{dev.mad_multiple:.1f}倍MAD）")
+                bear.append(f"{dev.indicator}严重偏离同行 ({dev.mad_multiple:.1f}倍MAD) ")
             else:
-                bear.append(f"{dev.indicator}偏离同行（{dev.mad_multiple:.1f}倍MAD）")
+                bear.append(f"{dev.indicator}偏离同行 ({dev.mad_multiple:.1f}倍MAD) ")
 
     if ctx.logic_anomalies:
         for anomaly in ctx.logic_anomalies:
-            bear.append(f"逻辑异常：{anomaly.summary}")
+            bear.append(f"逻辑异常: {anomaly.summary}")
 
     if ctx.benchmark and len(ctx.benchmark.peer_companies) > 0:
         bull.append(f"在{len(ctx.benchmark.peer_companies)}家可比公司中具备参考价值")
@@ -610,15 +610,15 @@ def render_to_markdown(report: Report) -> str:
     company = report.company_name or "N/A"
     stock = report.stock_code or ""
     year = report.report_year or "N/A"
-    lines.append(f"# 财报分析报告 — {company}（{stock}）{year}年")
+    lines.append(f"# 财报分析报告 — {company} ({stock}) {year}年")
     lines.append("")
-    lines.append(f"> 生成时间：{report.report_generated_at}")
+    lines.append(f"> 生成时间: {report.report_generated_at}")
     lines.append("")
     lines.append("---")
     lines.append("")
 
-    # ── 模块0：宏观事实 ──
-    lines.append("## 📊 模块0：宏观事实")
+    # ── 模块0: 宏观事实 ──
+    lines.append("## 📊 模块0: 宏观事实")
     lines.append("")
     if report.chart_configs:
         for cfg in report.chart_configs:
@@ -627,37 +627,37 @@ def render_to_markdown(report: Report) -> str:
             lines.append(f"![{alt_text}]({img_path})")
             lines.append("")
     else:
-        lines.append("*（无可用的图表数据）*")
+        lines.append("* (无可用的图表数据) *")
         lines.append("")
 
     lines.append("---")
     lines.append("")
 
-    # ── 模块1：综合评级与得分区间 ──
-    lines.append("## 🏆 模块1：综合评级与得分区间")
+    # ── 模块1: 综合评级与得分区间 ──
+    lines.append("## 🏆 模块1: 综合评级与得分区间")
     lines.append("")
     assessment = report.overall_assessment
-    lines.append(f"**置信度得分**：{assessment.score} / 100")
+    lines.append(f"**置信度得分**: {assessment.score} / 100")
     if report.trust_interval:
         ti = report.trust_interval
-        lines.append(f"**不确定性区间**：[{ti.lower_bound}, {ti.upper_bound}]")
-        lines.append(f"**评级**：{assessment.confidence_tier}")
+        lines.append(f"**不确定性区间**: [{ti.lower_bound}, {ti.upper_bound}]")
+        lines.append(f"**评级**: {assessment.confidence_tier}")
         lines.append(f"")
-        lines.append(f"- 平均 m(Θ)（未分配不确定性）={ti.avg_m_theta}")
-        lines.append(f"- 平均 K（证据冲突系数）={ti.avg_k}")
+        lines.append(f"- 平均 m(Θ) (未分配不确定性) ={ti.avg_m_theta}")
+        lines.append(f"- 平均 K (证据冲突系数) ={ti.avg_k}")
     else:
-        lines.append(f"**评级**：{assessment.confidence_tier}")
+        lines.append(f"**评级**: {assessment.confidence_tier}")
 
     if assessment.peer_comparisons:
         lines.append("")
-        lines.append("**同行对比**：")
+        lines.append("**同行对比**: ")
         for p in assessment.peer_comparisons[:5]:
-            lines.append(f"- {p.company_name}（相似度：{p.similarity_score:.2f}）")
+            lines.append(f"- {p.company_name} (相似度: {p.similarity_score:.2f}) ")
     lines.append("")
 
     # 评分明细表
     if report.score_breakdown and report.score_breakdown.anomaly_details:
-        lines.append("**评分明细**：")
+        lines.append("**评分明细**: ")
         lines.append("")
         lines.append("| 指标 | 来源 | W_phe | K值 | 中心扣分 | [Bel, Pl] |")
         lines.append("|------|------|-------|-----|---------|-----------|")
@@ -672,21 +672,21 @@ def render_to_markdown(report: Report) -> str:
     lines.append("---")
     lines.append("")
 
-    # ── 模块2：核心异常指标清单 ──
-    lines.append("## ⚠️ 模块2：核心异常指标清单")
+    # ── 模块2: 核心异常指标清单 ──
+    lines.append("## ⚠️ 模块2: 核心异常指标清单")
     lines.append("")
     if report.core_anomalies:
         for a in report.core_anomalies:
             tag = "🔴 严重" if a.severity == "extreme" else "🟡 异常"
-            lines.append(f"### {tag} {a.indicator}（{a.source}层）")
-            lines.append(f"- K值（证据冲突）：{a.k_value}")
+            lines.append(f"### {tag} {a.indicator} ({a.source}层) ")
+            lines.append(f"- K值 (证据冲突) : {a.k_value}")
             if a.probabilities:
-                prob_str = "，".join(f"{k}：{v*100 if v<1 else v}%" for k, v in a.probabilities.items())
-                lines.append(f"- 概率归因：{prob_str}")
+                prob_str = "，".join(f"{k}: {v*100 if v<1 else v}%" for k, v in a.probabilities.items())
+                lines.append(f"- 概率归因: {prob_str}")
             if a.evidence:
                 for e in a.evidence[:2]:
                     if e.page_number:
-                        lines.append(f"- 证据来源：第{e.page_number}页")
+                        lines.append(f"- 证据来源: 第{e.page_number}页")
                     if e.source_excerpt:
                         lines.append(f"  > {e.source_excerpt[:100]}")
             lines.append("")
@@ -697,59 +697,59 @@ def render_to_markdown(report: Report) -> str:
     lines.append("---")
     lines.append("")
 
-    # ── 模块3：解释 ──
-    lines.append("## 🔍 模块3：解释")
+    # ── 模块3: 解释 ──
+    lines.append("## 🔍 模块3: 解释")
     lines.append("")
     if report.explanation_text:
         lines.append(report.explanation_text)
     else:
-        lines.append("*（无解释信息）*")
+        lines.append("* (无解释信息) *")
     lines.append("")
 
     lines.append("---")
     lines.append("")
 
-    # ── 模块4：总结报告 ──
-    lines.append("## 📋 模块4：总结报告")
+    # ── 模块4: 总结报告 ──
+    lines.append("## 📋 模块4: 总结报告")
     lines.append("")
     if report.summary_text:
         lines.append(report.summary_text)
     else:
-        lines.append("*（无总结信息）*")
+        lines.append("* (无总结信息) *")
     lines.append("")
 
     lines.append("---")
     lines.append("")
 
-    # ── 多空逻辑栈（兼容） ──
+    # ── 多空逻辑栈 (兼容)  ──
     if report.bull_points or report.bear_points:
         lines.append("## 📈 多空逻辑栈")
         lines.append("")
         if report.bull_points:
-            lines.append("**看多支持点**：")
+            lines.append("**看多支持点**: ")
             for p in report.bull_points:
                 lines.append(f"- ✅ {p}")
             lines.append("")
         if report.bear_points:
-            lines.append("**看空风险点**：")
+            lines.append("**看空风险点**: ")
             for p in report.bear_points:
                 lines.append(f"- ⚠️ {p}")
         lines.append("")
         lines.append("---")
         lines.append("")
 
-    # ── 模块5：附注·证据溯源 ──
+    # ── 模块5: 附注·证据溯源 ──
     if report.evidence_sources:
-        lines.append("## 📎 模块5：附注·证据溯源")
+        lines.append("## 📎 模块5: 附注·证据溯源")
         lines.append("")
         for es in report.evidence_sources:
             lines.append(f"[^{es.footnote_id}]: **{es.cause}**")
             if es.source_type == "年报原文":
-                lines.append(f"    ├─ 年报原文：第{es.page_number}页——\"{es.source_text[:200]}\"")
+                lines.append(f"    ├─ 年报原文: 第{es.page_number}页——\"{es.source_text[:200]}\"")
             else:
-                lines.append(f"    └─ {es.source_type}：{es.source_text[:200]}")
+                lines.append(f"    └─ {es.source_type}: {es.source_text[:200]}")
                 if es.hypothesis_reasoning:
-                    lines.append(f"        └─ 推理逻辑：{es.hypothesis_reasoning[:200]}")
+                    lines.append(f"        └─ 推理逻辑: {es.hypothesis_reasoning[:200]}")
             lines.append("")
 
     return "\n".join(lines)

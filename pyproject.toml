@@ -26,6 +26,9 @@ pdf = [
     "pdfplumber>=0.10",
 ]
 
+[tool.setuptools.packages.find]
+include = ["pipeline", "llm", "layers", "schemas", "config"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

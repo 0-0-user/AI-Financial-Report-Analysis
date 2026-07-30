@@ -1,11 +1,11 @@
-"""第0层：PDF解析器 — 将年报PDF提取为原始文本和表格数据
+"""第0层: PDF解析器 — 将年报PDF提取为原始文本和表格数据
 
-唯一后端：pdfplumber（纯 Python，零额外依赖）
+唯一后端: pdfplumber (纯 Python，零额外依赖) 
 
-设计约束：
-- 不涉及任何业务逻辑，只做文件→结构化数据
+设计约束: 
+- 不涉及任何业务逻辑，只做文件->结构化数据
 - 输出原始 dict，由 chunker.py 切分为 RawDocument
-- 仅支持文本型 PDF（A 股年报 99%+ 是交易所电子报送生成的文本型 PDF）
+- 仅支持文本型 PDF (A 股年报 99%+ 是交易所电子报送生成的文本型 PDF) 
 """
 
 import logging
@@ -30,7 +30,7 @@ class PDFParser:
         Args:
             pdf_path: PDF 文件路径
             extract_tables: 是否提取表格
-            password: PDF 密码（如有）
+            password: PDF 密码 (如有) 
         """
         self.pdf_path = Path(pdf_path)
         self.extract_tables = extract_tables
@@ -101,10 +101,10 @@ class PDFParser:
     def _guess_year(self) -> Optional[int]:
         """从文件名猜测年报年份
 
-        常见命名模式：
-        - 600519_2024.pdf → 2024
-        - 贵州茅台2024年年报.pdf → 2024
-        - 2024-12-31_annual_report.pdf → 2024
+        常见命名模式: 
+        - 600519_2024.pdf -> 2024
+        - 贵州茅台2024年年报.pdf -> 2024
+        - 2024-12-31_annual_report.pdf -> 2024
         """
         name = self.pdf_path.stem
         years = re.findall(r"(20\d{2})", name)

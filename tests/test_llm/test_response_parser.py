@@ -3,9 +3,9 @@
  tests/test_llm/test_response_parser.py — 响应解析器测试
 ==========================================================
 
-测试 ResponseParser 对 LLM 输出的各种格式处理：
+测试 ResponseParser 对 LLM 输出的各种格式处理: 
 - 标准 JSON 解析
-- Markdown 代码块包裹（```json ```）的处理
+- Markdown 代码块包裹 (```json ```) 的处理
 - 单引号替代双引号的容错
 - 文本中提取事实条目
 """

@@ -1,6 +1,6 @@
 """Pipeline 执行监控与审计日志
 
-记录每次流水线运行的：
+记录每次流水线运行的: 
 - 各层执行时间
 - LLM 调用次数和 token 消耗
 - 异常数量和严重度分布
@@ -82,7 +82,7 @@ class PipelineMetrics:
         for layer in self.layers:
             lines.append(
                 f"  {layer.name:25s} {layer.elapsed_ms:8.0f}ms  "
-                f"LLM×{layer.llm_calls}"
+                f"LLMx{layer.llm_calls}"
             )
         total_ms = sum(l.elapsed_ms for l in self.layers)
         lines.append(f"  {'总计':25s} {total_ms:8.0f}ms")

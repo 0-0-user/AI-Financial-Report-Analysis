@@ -3,7 +3,7 @@
  tests/test_layers/test_d2_reasoning.py — D2 D-S 证据理论测试
 ==========================================================
 
-测试 D2 层的 D-S 证据理论核心逻辑（纯数学，无 LLM）：
+测试 D2 层的 D-S 证据理论核心逻辑 (纯数学，无 LLM) : 
 - _build_m1 / _build_m2 mass 构造
 - _dempster_combine 合成
 - _pignistic_transform 概率转换
@@ -35,12 +35,12 @@ from schemas.reasoning import Explanation, Hypothesis
 
 class TestBuildM1:
     def test_empty(self):
-        """k=0 → m₁(Θ)=1.0"""
+        """k=0 -> m₁(Θ)=1.0"""
         m1 = _build_m1([], epsilon_1=0.35)
         assert m1 == {"Θ": 1.0}
 
     def test_single(self):
-        """k=1 → m₁({E})=0.65, m₁(Θ)=0.35"""
+        """k=1 -> m₁({E})=0.65, m₁(Θ)=0.35"""
         causes = [{"name": "行业周期下行", "path1_indices": [0], "path2_indices": [], "conflicts_with": []}]
         m1 = _build_m1(causes, epsilon_1=0.35)
         assert m1["行业周期下行"] == pytest.approx(0.65, rel=1e-4)
@@ -48,7 +48,7 @@ class TestBuildM1:
         assert abs(sum(m1.values()) - 1.0) < 1e-6
 
     def test_two(self):
-        """k=2 → 73开: 0.455 + 0.195 + 0.35 = 1.0"""
+        """k=2 -> 73开: 0.455 + 0.195 + 0.35 = 1.0"""
         causes = [
             {"name": "主要归因", "path1_indices": [0], "path2_indices": [], "conflicts_with": []},
             {"name": "次要归因", "path1_indices": [1], "path2_indices": [], "conflicts_with": []},
@@ -60,7 +60,7 @@ class TestBuildM1:
         assert abs(sum(m1.values()) - 1.0) < 1e-6
 
     def test_three_exponential_decay(self):
-        """k≥3 → 指数衰减: 1/2, 1/4, rest"""
+        """k>=3 -> 指数衰减: 1/2, 1/4, rest"""
         causes = [
             {"name": "A", "path1_indices": [0], "path2_indices": [], "conflicts_with": []},
             {"name": "B", "path1_indices": [1], "path2_indices": [], "conflicts_with": []},
@@ -81,12 +81,12 @@ class TestBuildM1:
 
 class TestBuildM2:
     def test_empty(self):
-        """k=0 → m₂(Θ)=1.0"""
+        """k=0 -> m₂(Θ)=1.0"""
         m2 = _build_m2([], [], epsilon_2=0.30)
         assert m2 == {"Θ": 1.0}
 
     def test_single(self):
-        """单一路2归因 → 全部 pool 归它"""
+        """单一路2归因 -> 全部 pool 归它"""
         original_hypotheses = [
             Hypothesis(hypothesis="需求下降", reasoning="行业周期下行", source="券商深度报告", confidence_rank=1),
         ]
@@ -100,7 +100,7 @@ class TestBuildM2:
         assert abs(sum(m2.values()) - 1.0) < 1e-6
 
     def test_multi_normalized_top5(self):
-        """多个归因 → 按 consensus_weight 归一化后分配 0.70"""
+        """多个归因 -> 按 consensus_weight 归一化后分配 0.70"""
         original_hypotheses = [
             Hypothesis(hypothesis="需求下降", reasoning="", source="券商深度报告", confidence_rank=1),
             Hypothesis(hypothesis="成本上升", reasoning="", source="行业新闻", confidence_rank=2),
@@ -112,7 +112,7 @@ class TestBuildM2:
             {"name": "政策影响", "path1_indices": [], "path2_indices": [2], "conflicts_with": []},
         ]
         m2 = _build_m2(causes, original_hypotheses, epsilon_2=0.30)
-        # 券商=1.0, 新闻=0.7, 股吧=0.3 → cw 归一化后 ×0.70
+        # 券商=1.0, 新闻=0.7, 股吧=0.3 -> cw 归一化后 x0.70
         assert "需求下降" in m2
         assert "成本上升" in m2
         assert "政策影响" in m2
@@ -134,7 +134,7 @@ class TestBuildM2:
         ]
         m2 = _build_m2(causes, original_hypotheses, epsilon_2=0.30)
         # 最多 5 个归因名 + Θ
-        # 券商(1.0)、A0宏观(0.6)、行业新闻(0.7×2)、行业常识(0.5) → 前5名
+        # 券商(1.0)、A0宏观(0.6)、行业新闻(0.7x2)、行业常识(0.5) -> 前5名
         cause_count = sum(1 for k in m2 if k != "Θ")
         assert cause_count <= 5, f"Expected at most 5 causes, got {cause_count}"
 
@@ -173,13 +173,13 @@ class TestSourceCountBonus:
 
 class TestCalcConsensusWeight:
     def test_single_source(self):
-        """券商深度报告 × 1 来源 = 1.0 × 0.4 = 0.4"""
+        """券商深度报告 x 1 来源 = 1.0 x 0.4 = 0.4"""
         cause = {"name": "T", "path1_indices": [], "path2_indices": [0], "conflicts_with": []}
         hypos = [Hypothesis(hypothesis="T", reasoning="", source="券商深度报告", confidence_rank=1)]
         assert _calc_consensus_weight(cause, hypos) == pytest.approx(0.4, rel=1e-4)
 
     def test_three_sources(self):
-        """券商深度报告 + 行业新闻 + A0宏观事实: 权威性=1.0, count=3→×1.0 = 1.0"""
+        """券商深度报告 + 行业新闻 + A0宏观事实: 权威性=1.0, count=3->x1.0 = 1.0"""
         cause = {"name": "T", "path1_indices": [], "path2_indices": [0, 1, 2], "conflicts_with": []}
         hypos = [
             Hypothesis(hypothesis="T", reasoning="", source="券商深度报告", confidence_rank=1),
@@ -195,7 +195,7 @@ class TestCalcConsensusWeight:
 
 class TestDempsterCombine:
     def test_no_conflict(self):
-        """双方部分重合，无冲突 → K=0"""
+        """双方部分重合，无冲突 -> K=0"""
         m1 = {"原因A": 0.65, "Θ": 0.35}
         m2 = {"原因A": 0.35, "原因B": 0.21, "原因C": 0.14, "Θ": 0.30}
         cmap = {}
@@ -205,11 +205,11 @@ class TestDempsterCombine:
         assert "原因B" in mass_final
         assert "原因C" in mass_final
         assert abs(sum(mass_final.values()) - 1.0) < 1e-6
-        # 双方都支持 A → A 最大
+        # 双方都支持 A -> A 最大
         assert mass_final["原因A"] > mass_final["原因B"]
 
     def test_with_conflict(self):
-        """一方说 A，一方说 fraud，互斥 → K > 0"""
+        """一方说 A，一方说 fraud，互斥 -> K > 0"""
         m1 = {"正常经营波动": 0.65, "Θ": 0.35}
         m2 = {"财务造假": 0.49, "其他因素": 0.21, "Θ": 0.30}
         cmap = {"正常经营波动": {"财务造假"}, "财务造假": {"正常经营波动"}}
@@ -218,18 +218,18 @@ class TestDempsterCombine:
         assert abs(sum(mass_final.values()) - 1.0) < 1e-6
 
     def test_full_agreement(self):
-        """双方都指向同一归因 → mass 增强"""
+        """双方都指向同一归因 -> mass 增强"""
         m1 = {"原因A": 0.65, "Θ": 0.35}
         m2 = {"原因A": 0.70, "Θ": 0.30}
         cmap = {}
         mass_final, K = _dempster_combine(m1, m2, cmap)
         assert K == pytest.approx(0.0, rel=1e-4)
-        # m(A) = (0.65×0.70 + 0.65×0.30 + 0.35×0.70) / 1.0 = 0.455+0.195+0.245 = 0.895
+        # m(A) = (0.65x0.70 + 0.65x0.30 + 0.35x0.70) / 1.0 = 0.455+0.195+0.245 = 0.895
         assert mass_final["原因A"] == pytest.approx(0.895, rel=1e-4)
         assert mass_final["Θ"] == pytest.approx(0.105, rel=1e-4)
 
     def test_high_conflict_detected(self):
-        """高冲突：K > 0.6"""
+        """高冲突: K > 0.6"""
         m1 = {"正常经营": 0.80, "Θ": 0.20}
         m2 = {"财务造假": 0.85, "Θ": 0.15}
         cmap = {"正常经营": {"财务造假"}, "财务造假": {"正常经营"}}
@@ -239,7 +239,7 @@ class TestDempsterCombine:
         assert abs(sum(mass_final.values()) - 1.0) < 1e-6
 
     def test_both_empty(self):
-        """双方都只有 Θ → m_final(Θ)=1.0, K=0"""
+        """双方都只有 Θ -> m_final(Θ)=1.0, K=0"""
         m1 = {"Θ": 1.0}
         m2 = {"Θ": 1.0}
         cmap = {}
@@ -248,7 +248,7 @@ class TestDempsterCombine:
         assert mass_final.get("Θ", 0) == pytest.approx(1.0, rel=1e-4)
 
     def test_one_side_empty(self):
-        """单方有结果 → 另一方 Θ 相当于 identity"""
+        """单方有结果 -> 另一方 Θ 相当于 identity"""
         m1 = {"原因A": 0.65, "Θ": 0.35}
         m2 = {"Θ": 1.0}
         cmap = {}
@@ -258,7 +258,7 @@ class TestDempsterCombine:
         assert mass_final["Θ"] == pytest.approx(0.35, rel=1e-4)
 
     def test_complete_conflict(self):
-        """完全冲突：m₁(A)=1.0, m₂(B)=1.0, A↔B → K=1.0"""
+        """完全冲突: m₁(A)=1.0, m₂(B)=1.0, A↔B -> K=1.0"""
         m1 = {"A": 1.0}
         m2 = {"B": 1.0}
         cmap = {"A": {"B"}, "B": {"A"}}
@@ -283,7 +283,7 @@ class TestPignisticTransform:
         assert "Θ" not in probs
 
     def test_all_uncertainty(self):
-        """全 Θ → 返回 '其他原因'"""
+        """全 Θ -> 返回 '其他原因'"""
         probs = _pignistic_transform({"Θ": 1.0})
         assert probs == {"其他原因": 1.0}
 
@@ -339,7 +339,7 @@ class TestExtractIndicator:
 
 
 # ============================================================
-# 集成测试：run_probability_allocation
+# 集成测试: run_probability_allocation
 # ============================================================
 
 class TestRunProbabilityAllocation:
@@ -349,7 +349,7 @@ class TestRunProbabilityAllocation:
         assert result == []
 
     def test_single_anomaly_with_mocked_merge(self, monkeypatch):
-        """单个异常，mock LLM 合并 → 验证输出结构完整"""
+        """单个异常，mock LLM 合并 -> 验证输出结构完整"""
         def mock_merge(indicator, lookups, hypotheses):
             return [{"name": "存货增加", "path1_indices": [0], "path2_indices": [0], "conflicts_with": []}]
         monkeypatch.setattr(

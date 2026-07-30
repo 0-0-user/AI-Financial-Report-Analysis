@@ -34,7 +34,7 @@ OUTPUT_PATH = ROOT / "config/industry_quantiles.yaml"
 # ── 6 维指标 + akshare 列名映射 ──
 DIMENSIONS = ["毛利率", "净利率", "总资产周转率", "资产负债率", "研发费用率", "销售费用率"]
 
-# akshare stock_financial_analysis_indicator 返回的列名（与维度对应）
+# akshare stock_financial_analysis_indicator 返回的列名 (与维度对应) 
 AKSHARE_COL_MAP = {
     "毛利率": "销售毛利率(%)",
     "净利率": "销售净利率(%)",
@@ -46,7 +46,7 @@ AKSHARE_COL_MAP = {
 
 # 分位数点
 QUANTILES = [0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95]
-# 规模分层（总资产对数）
+# 规模分层 (总资产对数) 
 SIZE_BINS = {"小型": (0, 5e8), "中型": (5e8, 4e9), "大型": (4e9, float("inf"))}
 
 
@@ -136,9 +136,9 @@ def compute_industry_quantiles(
     all_codes: set[str],
     quantiles: list[float],
 ) -> dict:
-    """计算每个行业 × 指标的分位数分布
+    """计算每个行业 x 指标的分位数分布
 
-    同时计算全市场基准（fallback）。
+    同时计算全市场基准 (fallback) 。
     """
     result: dict[str, dict] = {}
 
@@ -166,7 +166,7 @@ def compute_industry_quantiles(
 def _aggregate_industry(
     codes: set[str], all_data: dict[str, dict], years: list[int],
 ) -> dict[str, list[float]]:
-    """聚合行业内所有公司的逐年数据 → {dim: [val1, val2, ...]}"""
+    """聚合行业内所有公司的逐年数据 -> {dim: [val1, val2, ...]}"""
     aggregated: dict[str, list[float]] = {d: [] for d in DIMENSIONS}
     for code in codes:
         company_data = all_data.get(code, {})
@@ -211,9 +211,9 @@ def _compute_size_quantiles(
         assets = []
         for year_data in company_data.values():
             if "总资产周转率" in year_data:
-                # 反推总资产 = 营收 / 周转率（近似）
+                # 反推总资产 = 营收 / 周转率 (近似) 
                 pass
-        # 简化: 按股票代码顺序大致分组（后续可用 akshare 获取总资产）
+        # 简化: 按股票代码顺序大致分组 (后续可用 akshare 获取总资产) 
         idx = list(codes).index(code) if code in codes else 0
         total = len(codes)
         if idx < total * 0.3:
@@ -235,7 +235,7 @@ def compute_quantile_regression(
     codes: set[str], all_data: dict[str, dict],
     years: list[int],
 ) -> dict | None:
-    """分位数回归: 总资产 → 各指标的 τ=0.25 分位曲线
+    """分位数回归: 总资产 -> 各指标的 τ=0.25 分位曲线
 
     需要 statsmodels。如果没有，跳过。
     """
@@ -246,7 +246,7 @@ def compute_quantile_regression(
         return None
 
     # 收集 (log_assets, dim_value) 对
-    # 需要总资产数据，这里用简化版：从现有数据推断
+    # 需要总资产数据，这里用简化版: 从现有数据推断
     logger.info("分位数回归需要总资产数据，当前仅用周转率+营收反推近似")
     # 实际实现需要 akshare 获取资产负债表总资产
     return None  # 占位，后续扩展
@@ -273,8 +273,8 @@ def generate_config(
         "#",
         "# 每个行业含 7 个分位点 (p05/p10/p25/p50/p75/p90/p95)",
         "# + mean/std/n (样本量)",
-        "# _market: 全市场基准（行业缺失时回退）",
-        "# _market_size: 全市场按规模（大/中/小）分层",
+        "# _market: 全市场基准 (行业缺失时回退) ",
+        "# _market_size: 全市场按规模 (大/中/小) 分层",
         "#",
         "# 由 scripts/build_industry_quantiles.py 自动生成",
         "# 建议每季度重新运行以更新数据",
@@ -305,16 +305,16 @@ def generate_config(
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="构建行业分位数基准数据库")
-    parser.add_argument("--industry", type=str, help="仅处理指定行业（如 白酒）")
+    parser.add_argument("--industry", type=str, help="仅处理指定行业 (如 白酒) ")
     parser.add_argument("--years", type=str, default="2021,2022,2023,2024", help="年份范围")
-    parser.add_argument("--sample", type=int, default=30, help="每行业最多采样公司数（加速）")
+    parser.add_argument("--sample", type=int, default=30, help="每行业最多采样公司数 (加速) ")
     parser.add_argument("--regression", action="store_true", help="含规模分位数回归")
     parser.add_argument("--dry-run", action="store_true", help="预览不写文件")
     parser.add_argument("--output", type=str, help="输出路径")
     args = parser.parse_args()
 
     years = [int(y.strip()) for y in args.years.split(",")]
-    logger.info(f"年份: {years}, 采样: ≤{args.sample}/行业")
+    logger.info(f"年份: {years}, 采样: <={args.sample}/行业")
 
     # 1. 加载行业分类
     industry_map = load_industry_csv()
@@ -342,7 +342,7 @@ def main():
         sampling_map, all_data, years, all_codes, QUANTILES,
     )
 
-    # 5. 分位数回归（可选）
+    # 5. 分位数回归 (可选) 
     if args.regression:
         logger.info("分位数回归暂未实现，保留接口")
 

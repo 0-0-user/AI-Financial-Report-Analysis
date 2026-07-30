@@ -3,11 +3,11 @@
  tests/test_layers/test_e1_scoring.py — 新评分公式测试
 ==========================================================
 
-测试 E1 层新公式：
-    Score_j = W_phe × (1 - K) × Σ P × S_base
-    Final = 100 + Σ Score_j  （允许负数，无clamp）
+测试 E1 层新公式: 
+    Score_j = W_phe x (1 - K) x Σ P x S_base
+    Final = 100 + Σ Score_j   (允许负数，无clamp) 
 
-测试方式：构造 PipelineContext 注入 mock 数据，验证各项中间值。
+测试方式: 构造 PipelineContext 注入 mock 数据，验证各项中间值。
 """
 
 import pytest
@@ -33,7 +33,7 @@ class TestScoring:
         assert result.anomaly_details == []
 
     def test_deduction_with_c_layer_deviation(self):
-        """C 层偏差异常 + D层推理 + D3语义匹配 → 正确扣分"""
+        """C 层偏差异常 + D层推理 + D3语义匹配 -> 正确扣分"""
         ctx = PipelineContext()
         ctx.deviations = [
             DeviationAnomaly(
@@ -62,22 +62,22 @@ class TestScoring:
         assert len(result.anomaly_details) == 1
         detail = result.anomaly_details[0]
 
-        # W_phe = min(4/3, 5) ≈ 1.3333
+        # W_phe = min(4/3, 5) ~ 1.3333
         assert detail.w_phe == pytest.approx(1.3333, rel=1e-3)
         # K = 0.2
         assert detail.k_value == 0.2
         assert detail.delta == 0.8
 
-        # weighted_sum = 0.6 × (-1) + 0.4 × (-2) = -0.6 - 0.8 = -1.4
-        # effective = -1.4 × 0.8 = -1.12
-        # anomaly_score = 1.3333 × (-1.12) ≈ -1.4933 → round到2位 = -1.49
+        # weighted_sum = 0.6 x (-1) + 0.4 x (-2) = -0.6 - 0.8 = -1.4
+        # effective = -1.4 x 0.8 = -1.12
+        # anomaly_score = 1.3333 x (-1.12) ~ -1.4933 -> round到2位 = -1.49
         assert detail.anomaly_score == pytest.approx(-1.49, rel=1e-2)
 
         assert result.total_deduction == pytest.approx(-1.49, rel=1e-2)
         assert result.final_score == pytest.approx(98.51, rel=1e-2)
 
     def test_bplus_anomaly_deduction(self):
-        """B+ 层逻辑异常 + D层推理 → 正确扣分"""
+        """B+ 层逻辑异常 + D层推理 -> 正确扣分"""
         ctx = PipelineContext()
         ctx.logic_anomalies = [
             LogicAnomaly(
@@ -110,9 +110,9 @@ class TestScoring:
         assert detail.k_value == 0.35
         assert detail.delta == 0.65
 
-        # weighted_sum = 0.7 × 0 + 0.3 × (-3) = -0.9
-        # effective = -0.9 × 0.65 = -0.585
-        # anomaly_score = 3.0 × (-0.585) = -1.755
+        # weighted_sum = 0.7 x 0 + 0.3 x (-3) = -0.9
+        # effective = -0.9 x 0.65 = -0.585
+        # anomaly_score = 3.0 x (-0.585) = -1.755
         assert detail.anomaly_score == pytest.approx(-1.755, rel=1e-3)
         assert result.final_score == pytest.approx(98.245, rel=1e-3)
 
@@ -142,7 +142,7 @@ class TestScoring:
         assert detail.delta == 1.0  # 不打折
         # W_phe = min(3/3, 5) = 1.0
         assert detail.w_phe == 1.0
-        # anomaly_score = 1.0 × 1.0 × (1.0 × -1) = -1.0
+        # anomaly_score = 1.0 x 1.0 x (1.0 x -1) = -1.0
         assert detail.anomaly_score == -1.0
 
     def test_negative_score_allowed(self):
@@ -169,11 +169,11 @@ class TestScoring:
         ]
         result = run_scoring(ctx)
 
-        # anomaly_score = 5.0 × 1.0 × (1.0 × -3) = -15.0
+        # anomaly_score = 5.0 x 1.0 x (1.0 x -3) = -15.0
         assert result.total_deduction == -15.0
         assert result.final_score == 85.0  # 100 - 15 = 85
 
-        # 极端：7 个同样的极端异常
+        # 极端: 7 个同样的极端异常
         ctx2 = PipelineContext()
         ctx2.logic_anomalies = [LogicAnomaly(
             check_name=f"异常{i}", value=1.0, threshold=0.5,
@@ -192,7 +192,7 @@ class TestScoring:
         ]
         result2 = run_scoring(ctx2)
 
-        # 7 × (-15) = -105, final = 100 - 105 = -5
+        # 7 x (-15) = -105, final = 100 - 105 = -5
         assert result2.final_score == -5.0  # 允许负分
 
     def test_w_phe_c_mapping(self):

@@ -3,14 +3,14 @@
  tests/test_pipeline/test_full_pipeline.py — 流水线集成测试
 ==========================================================
 
-端到端测试完整流水线的三个核心场景：
+端到端测试完整流水线的三个核心场景: 
 
-1. 正常路径：构造完整 mock 数据（A→B→B+→C→D→E），
+1. 正常路径: 构造完整 mock 数据 (A->B->B+->C->D->E) ，
    验证 E1 评分和 E2 报告输出格式正确
 
-2. 阻断路径：B1 层勾稽校验失败时，输出异常阻断报告
+2. 阻断路径: B1 层勾稽校验失败时，输出异常阻断报告
 
-3. 空数据路径：没有任何异常时，输出空报告（100 分）
+3. 空数据路径: 没有任何异常时，输出空报告 (100 分) 
 
 每个测试都直接构造 PipelineContext，绕过 stubs 直接验证
 数据契约和评分逻辑的正确性。
@@ -29,7 +29,7 @@ from layers.layer_e_output.e2_report_gen import generate_report
 
 
 def _make_full_context() -> PipelineContext:
-    """构造一份完整的 mock PipelineContext（正常数据）"""
+    """构造一份完整的 mock PipelineContext (正常数据) """
     ctx = PipelineContext()
 
     # ── A 层数据 ──
@@ -86,10 +86,10 @@ def _make_full_context() -> PipelineContext:
     )
     ctx.validation_passed = True
 
-    # ── B+ 层数据（无逻辑异常）──
+    # ── B+ 层数据 (无逻辑异常) ──
     ctx.logic_anomalies = []
 
-    # ── C 层数据（两个偏差异常）──
+    # ── C 层数据 (两个偏差异常) ──
     ctx.deviations = [
         DeviationAnomaly(
             indicator="存货周转率",
@@ -107,7 +107,7 @@ def _make_full_context() -> PipelineContext:
         ),
     ]
 
-    # ── D 层数据（概率归因）──
+    # ── D 层数据 (概率归因) ──
     ctx.reasoning_results = [
         ProbabilityAssignment(
             anomaly_indicator="存货周转率",
@@ -194,7 +194,7 @@ class TestFullPipeline:
         """B1 层校验失败时应输出阻断报告"""
         ctx = PipelineContext()
         ctx.validation_passed = False
-        ctx.errors = ["B1层阻断：勾稽校验失败，PDF 数据源可能损坏或造假"]
+        ctx.errors = ["B1层阻断: 勾稽校验失败，PDF 数据源可能损坏或造假"]
 
         # Orchestrator 在错误时调用 _build_error_report
         from pipeline.orchestrator import Orchestrator

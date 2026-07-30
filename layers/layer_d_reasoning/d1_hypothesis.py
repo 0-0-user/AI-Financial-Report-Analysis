@@ -1,22 +1,22 @@
-"""D1路2：外部情报推演——不看原文，基于外部信息发散假设
+"""D1路2: 外部情报推演——不看原文，基于外部信息发散假设
 
-职责：
+职责: 
 - 接收异常清单 + 行业标签 + A0 宏观事实 + 公司基本情况 + LLM 自身常识
 - LLM 基于多源信息发散出互斥的合理解释
-- 按来源权威性 × 共识强度排序
+- 按来源权威性 x 共识强度排序
 
-知识源（仅限以下）：
-1. 行业标签（同花顺行业分类）
-2. 外部宏观事实（A0 层 4 维度）
+知识源 (仅限以下) : 
+1. 行业标签 (同花顺行业分类) 
+2. 外部宏观事实 (A0 层 4 维度) 
 3. LLM 自身商业与行业预训练知识
-4. 公司基本情况（主营业务描述）
+4. 公司基本情况 (主营业务描述) 
 
-禁止使用：
-- 年报原文（MD&A / 附注）
-- 财务画像（FinancialProfile）
+禁止使用: 
+- 年报原文 (MD&A / 附注) 
+- 财务画像 (FinancialProfile) 
 
-错误处理：
-- LLM 调用失败 → 异常直接向上传播（不做降级）
+错误处理: 
+- LLM 调用失败 -> 异常直接向上传播 (不做降级) 
 - 整个 D 层及后续分析中断
 """
 
@@ -41,12 +41,12 @@ def generate_hypotheses(
     tags: Optional[CompanyTags] = None,
     business_desc: str = "",
 ) -> list[Hypothesis]:
-    """路2：基于外部信息 + 行业常识推演假设
+    """路2: 基于外部信息 + 行业常识推演假设
 
     Args:
         anomaly: LogicAnomaly 或 DeviationAnomaly
         macro_facts: A0 层输出的宏观事实列表
-        tags: A1 层输出的 CompanyTags（仅使用 hard_tags）
+        tags: A1 层输出的 CompanyTags (仅使用 hard_tags) 
         business_desc: A1 层提取的公司主营业务描述
 
     Returns:
@@ -62,7 +62,7 @@ def generate_hypotheses(
 
     macro_text = "\n".join(
         f"{i+1}. {fact}" for i, fact in enumerate(macro_facts)
-    ) if macro_facts else "（无宏观事实数据）"
+    ) if macro_facts else " (无宏观事实数据) "
 
     return _llm_generate(
         indicator=indicator_name,
@@ -101,7 +101,7 @@ def _format_deviation(anomaly: Any) -> str:
     mad = getattr(anomaly, "mad_multiple", None)
     if mad is not None:
         severity = "极端" if mad >= 5.0 else "显著" if mad >= 2.0 else "轻微"
-        parts = [f"偏离同行中位数 {mad:.1f} 倍 MAD（{severity}）"]
+        parts = [f"偏离同行中位数 {mad:.1f} 倍 MAD ({severity}) "]
         actual = getattr(anomaly, "actual_value", None)
         if actual is not None:
             parts.append(f"实际值={actual}")
@@ -117,7 +117,7 @@ def _format_deviation(anomaly: Any) -> str:
 def _format_industry_tags(tags: Optional[CompanyTags]) -> str:
     """格式化行业标签"""
     if not tags or not tags.hard_tags:
-        return "（无行业标签）"
+        return " (无行业标签) "
     hard_str = "；".join(f"{h.system}: {h.value}" for h in tags.hard_tags)
     return hard_str
 
@@ -136,7 +136,7 @@ def _llm_generate(
 ) -> list[Hypothesis]:
     """调用 LLM 推演假设并按多源交叉排序
 
-    知识源约束（路2 隔离规则）：
+    知识源约束 (路2 隔离规则) : 
     - 仅接收异常清单 + 行业标签 + 宏观事实 + 公司基本情况
     - 不接收年报原文、不接收财务画像
     """
@@ -149,7 +149,7 @@ def _llm_generate(
             "indicator": indicator,
             "actual_value": actual_value,
             "deviation": deviation,
-            "business_desc": business_desc or "（无主营业务描述）",
+            "business_desc": business_desc or " (无主营业务描述) ",
             "industry_tags": industry_tags,
             "macro_facts": macro_facts,
         },
@@ -197,7 +197,7 @@ def _parse_result(raw: str) -> list[Hypothesis]:
             stype = s.get("type", "")
             detail = s.get("detail", "")
             name = s.get("name", "")
-            source_str = f"{stype}" + (f"：{name}" if name else "") + (f"（{detail}）" if detail else "")
+            source_str = f"{stype}" + (f": {name}" if name else "") + (f" ({detail}) " if detail else "")
             reasoning_parts.append(source_str)
             source_labels.append(stype)
 
@@ -211,6 +211,6 @@ def _parse_result(raw: str) -> list[Hypothesis]:
             confidence_rank=rank,
         ))
 
-    # 按 confidence_rank 升序排列（1 排最前）
+    # 按 confidence_rank 升序排列 (1 排最前) 
     results.sort(key=lambda x: x.confidence_rank)
     return results

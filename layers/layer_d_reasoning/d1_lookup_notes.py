@@ -1,13 +1,13 @@
-"""D1路1：年报原文搬运工——原文说啥搬啥
+"""D1路1: 年报原文搬运工——原文说啥搬啥
 
-职责：
-- 接收年报原文（MD&A + 附注）+ 异常清单
+职责: 
+- 接收年报原文 (MD&A + 附注) + 异常清单
 - LLM 全权翻阅原文，找出与异常指标相关的解释
-- 按显要程度排序（篇幅最长、位置最前 = 最可信）
+- 按显要程度排序 (篇幅最长、位置最前 = 最可信) 
 - 不调自身常识、不做推测发散
 
-错误处理：
-- LLM 调用失败 → 异常直接向上传播（不做降级）
+错误处理: 
+- LLM 调用失败 -> 异常直接向上传播 (不做降级) 
 - 整个 D 层及后续分析中断
 """
 
@@ -27,18 +27,18 @@ logger = logging.getLogger(__name__)
 # ────────────────────────────────────────────
 
 def lookup_in_annual_report(raw_doc: RawDocument, anomaly: Any) -> list[Explanation]:
-    """路1：从年报原文中找出异常指标的解释
+    """路1: 从年报原文中找出异常指标的解释
 
-    纯搬运逻辑：
+    纯搬运逻辑: 
     - 全量原文传给 LLM，不做关键词预过滤
     - LLM 失败时异常直抛，不做降级
 
     Args:
-        raw_doc: 第 0 层输出的 RawDocument（管理层讨论 + 附注）
+        raw_doc: 第 0 层输出的 RawDocument (管理层讨论 + 附注) 
         anomaly: LogicAnomaly 或 DeviationAnomaly
 
     Returns:
-        按显要程度排序的 Explanation 列表（可能为空）
+        按显要程度排序的 Explanation 列表 (可能为空) 
 
     Raises:
         Exception: LLM 调用失败时向上传播
@@ -47,7 +47,7 @@ def lookup_in_annual_report(raw_doc: RawDocument, anomaly: Any) -> list[Explanat
     actual_value = _extract_actual_value(anomaly)
     deviation_text = _format_deviation(anomaly)
 
-    # 准备原文全文（不预过滤）
+    # 准备原文全文 (不预过滤) 
     md_text = _build_md_text(raw_doc.management_discussion)
     footnotes_text = _build_footnotes_text(raw_doc.footnotes)
 
@@ -81,7 +81,7 @@ def _format_deviation(anomaly: Any) -> str:
     mad = getattr(anomaly, "mad_multiple", None)
     if mad is not None:
         severity = "极端" if mad >= 5.0 else "显著" if mad >= 2.0 else "轻微"
-        return f"偏离同行中位数 {mad:.1f} 倍 MAD（{severity}）"
+        return f"偏离同行中位数 {mad:.1f} 倍 MAD ({severity}) "
 
     value = getattr(anomaly, "value", None)
     threshold = getattr(anomaly, "threshold", None)
@@ -99,14 +99,14 @@ def _build_md_text(management_discussion: Any) -> str:
     """将管理层讨论与分析部分拼接为全文文本"""
     sections = getattr(management_discussion, "sections", [])
     if not sections:
-        return "（无管理层讨论与分析内容）"
+        return " (无管理层讨论与分析内容) "
 
     lines = []
     for sec in sections:
         title = sec.get("title", "") if isinstance(sec, dict) else getattr(sec, "title", "")
         content = sec.get("content", "") if isinstance(sec, dict) else getattr(sec, "content", "")
         page = sec.get("page_number", 0) if isinstance(sec, dict) else getattr(sec, "page_number", 0)
-        lines.append(f"=== {title}（第{page}页）===\n{content}")
+        lines.append(f"=== {title} (第{page}页) ===\n{content}")
 
     return "\n\n".join(lines)
 
@@ -115,7 +115,7 @@ def _build_footnotes_text(footnotes: Any) -> str:
     """将附注明细拼接为全文文本"""
     items = getattr(footnotes, "items", [])
     if not items:
-        return "（无附注内容）"
+        return " (无附注内容) "
 
     lines = []
     for item in items:
@@ -124,7 +124,7 @@ def _build_footnotes_text(footnotes: Any) -> str:
         page = item.get("page_number", 0) if isinstance(item, dict) else getattr(item, "page_number", 0)
         is_table = item.get("is_table", False) if isinstance(item, dict) else getattr(item, "is_table", False)
         tag = " [表格]" if is_table else ""
-        lines.append(f"【{name}】（第{page}页）{tag}\n{content}")
+        lines.append(f"【{name}】 (第{page}页) {tag}\n{content}")
 
     return "\n\n".join(lines)
 
@@ -142,9 +142,9 @@ def _llm_lookup(
 ) -> list[Explanation]:
     """调用 LLM 翻阅原文，提取解释并按显要程度排序
 
-    知识源约束（路1 隔离规则）：
-    - 仅接收 raw_doc（md_text + footnotes_text）+ 异常清单
-    - 不接收任何 A 层数据（macro_facts, tags, financial_profile）
+    知识源约束 (路1 隔离规则) : 
+    - 仅接收 raw_doc (md_text + footnotes_text) + 异常清单
+    - 不接收任何 A 层数据 (macro_facts, tags, financial_profile) 
     - LLM 仅做提取，不得用自身知识补充
     """
     from llm.client import LLMClient
@@ -213,7 +213,7 @@ def _parse_result(raw: str) -> list[Explanation]:
             confidence_rank=rank,
         ))
 
-    # 按 confidence_rank 升序排列（1 排最前）
+    # 按 confidence_rank 升序排列 (1 排最前) 
     results.sort(key=lambda x: x.confidence_rank)
     return results
 

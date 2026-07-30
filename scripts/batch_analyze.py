@@ -5,12 +5,12 @@
 
 一次性分析多个公司的年报，适合批量处理场景。
 
-核心功能：
+核心功能: 
 1. 扫描指定目录下所有 PDF 文件
 2. 逐个执行完整流水线
 3. 所有报告输出到指定目录
 
-使用方式：
+使用方式: 
     # 分析某个目录下所有 PDF
     python scripts/batch_analyze.py --pdfs data/raw/ --output data/outputs/
 """

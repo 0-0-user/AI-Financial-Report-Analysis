@@ -3,9 +3,9 @@
  tests/test_layers/test_d1_reasoning.py — D1 双路径隔离测试
 ==========================================================
 
-测试 D1 层两路的知识来源隔离：
-- 路1（原文搬运）不接收任何 A 层数据
-- 路2（外部推演）不接收金融画像、不接收年报原文
+测试 D1 层两路的知识来源隔离: 
+- 路1 (原文搬运) 不接收任何 A 层数据
+- 路2 (外部推演) 不接收金融画像、不接收年报原文
 - LLM 失败时不做降级
 - confidence_rank 排序正确
 """
@@ -24,7 +24,7 @@ from schemas.reasoning import Explanation, Hypothesis
 
 
 # ============================================================
-# 辅助函数：构造 mock 数据
+# 辅助函数: 构造 mock 数据
 # ============================================================
 
 def _make_deviation_anomaly(
@@ -101,11 +101,11 @@ def _make_minimal_raw_doc() -> RawDocument:
 
 
 # ============================================================
-# 测试路1：原文搬运工
+# 测试路1: 原文搬运工
 # ============================================================
 
 class TestPath1Lookup:
-    """路1（原文搬运）隔离测试"""
+    """路1 (原文搬运) 隔离测试"""
 
     def test_extract_indicator_from_deviation(self):
         """从 DeviationAnomaly 提取指标名"""
@@ -139,10 +139,10 @@ class TestPath1Lookup:
         result = _format_deviation(anomaly)
         assert "3.5" in result
         assert "MAD" in result
-        assert "显著" in result  # 3.5 >= 2.0 → 显著，非极端
+        assert "显著" in result  # 3.5 >= 2.0 -> 显著，非极端
 
     def test_format_deviation_logic(self):
-        """LogicAnomaly 偏离度格式化（value/threshold）"""
+        """LogicAnomaly 偏离度格式化 (value/threshold) """
         from layers.layer_d_reasoning.d1_lookup_notes import _format_deviation
         anomaly = _make_logic_anomaly()
         result = _format_deviation(anomaly)
@@ -243,11 +243,11 @@ class TestPath1Lookup:
 
 
 # ============================================================
-# 测试路2：外部情报推演
+# 测试路2: 外部情报推演
 # ============================================================
 
 class TestPath2Hypothesis:
-    """路2（外部推演）隔离测试"""
+    """路2 (外部推演) 隔离测试"""
 
     def test_extract_indicator_name(self):
         """指标名提取"""
@@ -261,7 +261,7 @@ class TestPath2Hypothesis:
         anomaly = _make_deviation_anomaly(mad_multiple=3.5)
         result = _format_deviation(anomaly)
         assert "3.5" in result
-        assert "显著" in result  # 3.5 >= 2.0 → 显著，非极端
+        assert "显著" in result  # 3.5 >= 2.0 -> 显著，非极端
         assert "实际值" in result
 
     def test_format_industry_tags(self):
@@ -381,13 +381,13 @@ class TestDualPath:
         assert "business_desc" in sig.parameters
 
         # 验证 run_dual_path_analysis 内部提取 business_desc
-        #（通过检查源代码确认）
+        # (通过检查源代码确认) 
         source = inspect.getsource(run_dual_path_analysis)
         assert "business_description" in source
         assert "company_overview" in source
 
     def test_path_does_not_catch_exceptions(self):
-        """路1 和路2 都不应捕获 LLM 异常（无 try/except 包裹）"""
+        """路1 和路2 都不应捕获 LLM 异常 (无 try/except 包裹) """
         import inspect
         from layers.layer_d_reasoning import d1_lookup_notes, d1_hypothesis
 
@@ -428,7 +428,7 @@ class TestSchemaCompatibility:
         assert hyp.hypothesis == "战略备货"
 
     def test_d2_compatible(self):
-        """D1 输出仍可被 D2 消费（字段风格兼容）"""
+        """D1 输出仍可被 D2 消费 (字段风格兼容) """
         from schemas.reasoning import ProbabilityAssignment
         explanation = Explanation(
             summary="存货增加",

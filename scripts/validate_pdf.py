@@ -5,13 +5,13 @@
 
 在运行完整流水线前，快速检查 PDF 文件是否可以被正确解析。
 
-检查项目：
+检查项目: 
 1. 文件是否存在、大小是否合理
 2. 是否能读取页数
-3. 是否包含年报关键章节（财务数据、管理层讨论、附注）
+3. 是否包含年报关键章节 (财务数据、管理层讨论、附注) 
 4. 是否包含表格数据
 
-使用方式：
+使用方式: 
     python scripts/validate_pdf.py data/raw/600519_2024.pdf
 """
 
@@ -68,11 +68,11 @@ def main():
             else:
                 errors.append(f"未检测到章节: {section}")
 
-        # 检查表格（通过搜索常见财务指标）
+        # 检查表格 (通过搜索常见财务指标) 
         table_keywords = ["营业收入", "净利润", "资产总计", "负债合计", "经营活动", "每股收益"]
         found_keywords = [kw for kw in table_keywords if kw in text_snippets]
         if len(found_keywords) >= 3:
-            checks.append(f"财务表格检测通过（发现 {len(found_keywords)} 项指标）")
+            checks.append(f"财务表格检测通过 (发现 {len(found_keywords)} 项指标) ")
         else:
             errors.append("未检测到足够财务指标，可能不含表格数据")
     else:
@@ -100,7 +100,7 @@ def _count_pages(pdf_path: Path) -> int | None:
     except Exception:
         pass
 
-    # 备用方案：直接读取 PDF 文件头中的 /Pages 信息
+    # 备用方案: 直接读取 PDF 文件头中的 /Pages 信息
     try:
         with open(pdf_path, "rb") as f:
             content = f.read(100_000)  # 只读前 100KB

@@ -1,11 +1,11 @@
-"""C层：异常指标筛选与排序（v2: Sn/MAD 统一排序 + 分组报告）"""
+"""C层: 异常指标筛选与排序 (v2: Sn/MAD 统一排序 + 分组报告) """
 
 import numpy as np
 from schemas.anomaly import DeviationAnomaly
 
 
 def rank_by_severity(deviations: list[DeviationAnomaly]) -> list[DeviationAnomaly]:
-    """按严重程度排序（极端优先，同时考虑偏离倍数）"""
+    """按严重程度排序 (极端优先，同时考虑偏离倍数) """
     severity_order = {"extreme": 0, "abnormal": 1, "normal": 2}
     return sorted(
         deviations,
@@ -42,14 +42,14 @@ def group_by_category(deviations: list[DeviationAnomaly]) -> dict[str, list[Devi
 
 
 def summary_report(deviations: list[DeviationAnomaly]) -> str:
-    """生成可读摘要（供日志/调试）"""
+    """生成可读摘要 (供日志/调试) """
     if not deviations:
         return "C层: 无异常指标"
     ranked = rank_by_severity(deviations)
     extreme = sum(1 for d in ranked if d.severity == "extreme")
     abnormal = sum(1 for d in ranked if d.severity == "abnormal")
-    lines = [f"C层: {len(ranked)} 个异常（极端{extreme}，一般{abnormal}）"]
+    lines = [f"C层: {len(ranked)} 个异常 (极端{extreme}，一般{abnormal}) "]
     for d in ranked[:10]:
-        lines.append(f"  {d.indicator}: {d.mad_multiple:.1f}× [{d.severity}] "
+        lines.append(f"  {d.indicator}: {d.mad_multiple:.1f}x [{d.severity}] "
                      f"actual={d.actual_value:.2f} vs median={d.benchmark_value:.2f}")
     return "\n".join(lines)

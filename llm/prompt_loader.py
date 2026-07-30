@@ -6,12 +6,12 @@
 从 config/prompts/ 目录下加载 YAML 格式的 prompt 模板，
 并使用 Jinja2 引擎渲染变量。
 
-设计原则：代码与 prompt 分离
+设计原则: 代码与 prompt 分离
 - Prompt 文件放在 config/prompts/ 中，不混在代码里
 - 修改 prompt 不需要改代码，非开发同学也能审核
-- 模板支持 Jinja2 语法（循环、条件判断、变量插值）
+- 模板支持 Jinja2 语法 (循环、条件判断、变量插值) 
 
-使用方式：
+使用方式: 
     loader = PromptLoader()
     prompt = loader.load("a0_macro_search")
     rendered = loader.render("a0_macro_search", {"query": "光伏行业"})

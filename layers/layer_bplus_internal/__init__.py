@@ -1,16 +1,16 @@
-"""B+层：三步框架逻辑检查
+"""B+层: 三步框架逻辑检查
 
 Step 1: 数据层异常扫描 (吴林港2022)
-  - 净现比/收现比 → 利润含金量异常
-  - 存贷双高 → 资金结构异常
-  - 母子资金分离 → 资金管控异常
+  - 净现比/收现比 -> 利润含金量异常
+  - 存贷双高 -> 资金结构异常
+  - 母子资金分离 -> 资金管控异常
 
 Step 2: 经营行为验证 (张宁珊2017)
-  - 销售增长 vs 现金流背离 → 过度扩张嫌疑
-  - 过度投资检测（国企/民企分判）
+  - 销售增长 vs 现金流背离 -> 过度扩张嫌疑
+  - 过度投资检测 (国企/民企分判) 
 
 Step 3: 内控质量评估 (朱亚萍2015)
-  - 4 项定性检查 → 内控薄弱度
+  - 4 项定性检查 -> 内控薄弱度
 
 最终: 6 分制风险等级
 """
@@ -33,7 +33,7 @@ def run(ctx: PipelineContext) -> None:
             if ht.system == "同花顺三级行业" and ht.value:
                 industry = ht.value; break
 
-    # 国企/民企判断（从公司名称或标签推断）
+    # 国企/民企判断 (从公司名称或标签推断) 
     is_soe = _detect_soe(ctx)
 
     # Step 1+2: 数据异常 + 经营行为
@@ -49,8 +49,8 @@ def run(ctx: PipelineContext) -> None:
     except ImportError:
         pass
 
-    # Step 3: 内控检查（从年报元数据推断）
-    # 默认值：大型企业通常有独立审计和职责分离，小型较难保证
+    # Step 3: 内控检查 (从年报元数据推断) 
+    # 默认值: 大型企业通常有独立审计和职责分离，小型较难保证
     has_audit = _guess_audit(ctx)
     has_warning = _guess_warning_system(ctx)
     has_report = _guess_cf_report(ctx)
@@ -80,7 +80,7 @@ def run(ctx: PipelineContext) -> None:
 
 
 def _detect_soe(ctx: PipelineContext) -> bool | None:
-    """推断企业性质：国企/民企"""
+    """推断企业性质: 国企/民企"""
     if ctx.tags and ctx.tags.financial_profile:
         for ht in ctx.tags.hard_tags:
             if ht.value in ("军工电子", "航空装备"):

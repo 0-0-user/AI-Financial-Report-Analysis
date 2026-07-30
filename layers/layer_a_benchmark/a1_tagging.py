@@ -1,9 +1,9 @@
-"""A1层：纯代码查硬标签——同花顺行业分类 CSV
+"""A1层: 纯代码查硬标签——同花顺行业分类 CSV
 
-职责：
-- 从同花顺行业分类 CSV 查表获取硬标签（三级+二级+一级行业）
-- 两级降级：股票代码精确匹配 → 公司名模糊匹配
-- CSV 查不到则返回空硬标签（该企业不在同花顺分类库中）
+职责: 
+- 从同花顺行业分类 CSV 查表获取硬标签 (三级+二级+一级行业) 
+- 两级降级: 股票代码精确匹配 -> 公司名模糊匹配
+- CSV 查不到则返回空硬标签 (该企业不在同花顺分类库中) 
 - 纯代码实现，不涉及任何 LLM 调用
 - 财务数字画像由 A2 层从 akshare 实际财务数据计算
 """
@@ -17,7 +17,7 @@ from schemas.raw_doc import RawDocument
 logger = logging.getLogger(__name__)
 
 # ────────────────────────────────────────────
-# 同花顺行业分类 CSV 查表（硬标签）
+# 同花顺行业分类 CSV 查表 (硬标签) 
 # ────────────────────────────────────────────
 
 _INDUSTRY_CSV_PATH = Path("data/industry/thf_industry_classification.csv")
@@ -99,7 +99,7 @@ def _csv_lookup_by_name(company_name: str) -> dict | None:
 
 
 def _csv_lookup_hard_tags(stock_code: str, company_name: str) -> list[HardTag] | None:
-    """CSV 查表获取硬标签（三级+二级+一级）"""
+    """CSV 查表获取硬标签 (三级+二级+一级) """
     result = _csv_lookup_by_code(stock_code)
     if not result:
         result = _csv_lookup_by_name(company_name)
@@ -117,11 +117,11 @@ def _csv_lookup_hard_tags(stock_code: str, company_name: str) -> list[HardTag] |
 # ────────────────────────────────────────────
 
 def run_tagging(raw_doc: RawDocument) -> CompanyTags:
-    """读取公司信息，输出硬标签（纯代码，不调 LLM）
+    """读取公司信息，输出硬标签 (纯代码，不调 LLM) 
 
-    流程：
-        1. CSV 查硬标签（股票代码 → 公司名模糊匹配）
-        2. CSV 查不到 → 返回空硬标签（不降级）
+    流程: 
+        1. CSV 查硬标签 (股票代码 -> 公司名模糊匹配) 
+        2. CSV 查不到 -> 返回空硬标签 (不降级) 
         3. 财务数字画像由 A2 层从 akshare 实际数据计算
     """
     company_name = raw_doc.company_overview.company_name or ""

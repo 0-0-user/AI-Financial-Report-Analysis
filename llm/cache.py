@@ -1,13 +1,13 @@
 """LLM 响应缓存层 —— 避免重复调用、降低开发成本和延迟
 
-设计用途：
-- 开发调试阶段：同一 prompt + 同一变量 → 返回缓存结果，不消耗 API 额度
-- 生产环境：可选启用/禁用，通过环境变量 LLM_CACHE_ENABLED 控制
+设计用途: 
+- 开发调试阶段: 同一 prompt + 同一变量 -> 返回缓存结果，不消耗 API 额度
+- 生产环境: 可选启用/禁用，通过环境变量 LLM_CACHE_ENABLED 控制
 
-缓存策略：
+缓存策略: 
 - Key = hash(provider + model + prompt_name + variables_json)
-- 存储：本地 SQLite（lmdb 风格，但用 sqlite3 内置库）
-- TTL：默认 24 小时（可配置）
+- 存储: 本地 SQLite (lmdb 风格，但用 sqlite3 内置库) 
+- TTL: 默认 24 小时 (可配置) 
 - 缓存命中时记录日志，便于审计
 
 PDF 未提及，属于工程化补充。
@@ -70,7 +70,7 @@ class LLMCache:
         return hashlib.sha256(raw.encode()).hexdigest()
 
     def get(self, provider: str, model: str, prompt_name: str, variables: dict) -> Optional[str]:
-        """获取缓存（未过期且匹配则返回，否则返回 None）"""
+        """获取缓存 (未过期且匹配则返回，否则返回 None) """
         if not CACHE_ENABLED:
             return None
 
@@ -104,7 +104,7 @@ class LLMCache:
         conn.commit()
         conn.close()
 
-        logger.info(f"LLM 缓存命中: {prompt_name}（节省一次 API 调用）")
+        logger.info(f"LLM 缓存命中: {prompt_name} (节省一次 API 调用) ")
         return response
 
     def set(self, provider: str, model: str, prompt_name: str, variables: dict, response: str):

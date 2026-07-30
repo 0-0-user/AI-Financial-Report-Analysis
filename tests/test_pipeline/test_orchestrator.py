@@ -3,7 +3,7 @@
  tests/test_pipeline/test_orchestrator.py — 编排器测试
 ==========================================================
 
-测试 Orchestrator 的核心功能：
+测试 Orchestrator 的核心功能: 
 - 所有步骤是否已正确注册
 - 跳过步骤功能是否正常
 - 错误传播机制
@@ -18,7 +18,7 @@ class TestOrchestrator:
     """编排器测试"""
 
     def test_step_registration(self):
-        """所有步骤应已注册（通过 layers 包自动导入触发）"""
+        """所有步骤应已注册 (通过 layers 包自动导入触发) """
         import layers  # noqa: F401 — 触发 __init__.py 中的自动导入
 
         steps = registry.list_steps()

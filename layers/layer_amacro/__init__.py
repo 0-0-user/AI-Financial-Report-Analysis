@@ -1,12 +1,12 @@
-"""A0宏观搜索（独立步骤）：在 B 层之后执行，确保有完整的行业标签和财务数据上下文
+"""A0宏观搜索 (独立步骤) : 在 B 层之后执行，确保有完整的行业标签和财务数据上下文
 
-执行顺序：
-  layer_0 → layer_a → layer_b → layer_amacro → layer_bplus → layer_c → layer_d → layer_e
+执行顺序: 
+  layer_0 -> layer_a -> layer_b -> layer_amacro -> layer_bplus -> layer_c -> layer_d -> layer_e
 
-前置依赖（由 Orchestrator 校验）：
-  - raw_doc（Layer 0）
-  - tags（Layer A1）
-  - financials（Layer B）
+前置依赖 (由 Orchestrator 校验) : 
+  - raw_doc (Layer 0) 
+  - tags (Layer A1) 
+  - financials (Layer B) 
 """
 
 from pipeline.step_registry import registry

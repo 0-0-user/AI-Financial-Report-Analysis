@@ -1,4 +1,4 @@
-"""C层稳健偏差算法测试（v2: Sn + MAD + Pettitt + Bootstrap）"""
+"""C层稳健偏差算法测试 (v2: Sn + MAD + Pettitt + Bootstrap) """
 
 import pytest
 from layers.layer_c_deviation.mad_calculator import (
@@ -13,7 +13,7 @@ class TestMADCalculator:
     def test_mad_normal_case(self):
         values = [10, 12, 11, 13, 100]
         mad = calc_mad(values)
-        assert mad < 3.0  # 对极端值稳健（放宽到 3.0 因为 Sn 在 5 样本时偏大）
+        assert mad < 3.0  # 对极端值稳健 (放宽到 3.0 因为 Sn 在 5 样本时偏大) 
 
     def test_mad_all_same(self):
         values = [5, 5, 5, 5]

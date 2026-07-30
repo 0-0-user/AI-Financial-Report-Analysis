@@ -1,18 +1,18 @@
-"""A0层：外部宏观研报提取——LLM 联网搜索行业宏观事实
+"""A0层: 外部宏观研报提取——LLM 联网搜索行业宏观事实
 
-两步流程：
-1. 生成搜索词：调用 a0_search_query.yaml → LLM 输出 4 维度搜索关键词
-2. SerpAPI 搜索 + 提取事实：调用 a0_macro_facts.yaml → 从搜索结果中提取客观事实
+两步流程: 
+1. 生成搜索词: 调用 a0_search_query.yaml -> LLM 输出 4 维度搜索关键词
+2. SerpAPI 搜索 + 提取事实: 调用 a0_macro_facts.yaml -> 从搜索结果中提取客观事实
 
-核心约束：
-- LLM 只提取事实，不输出主观评级（"强烈看好/强烈卖出"等）
+核心约束: 
+- LLM 只提取事实，不输出主观评级 ("强烈看好/强烈卖出"等) 
 - 每条例事实必须带来源和日期
 - 矛盾数据跳过不输出
 - 某维度无有效数据则输出空
 
 SerpAPI Key 从环境变量 SERPAPI_KEY 读取。
 
-使用方式：
+使用方式: 
     facts = run_macro_search(ctx)
     # facts = ["今年上半年白酒行业处于去库存尾声", ...]
 """
@@ -30,22 +30,22 @@ SERPAPI_URL = "https://serpapi.com/search"
 
 
 def run_macro_search(ctx: PipelineContext) -> list[str]:
-    """A0 层主入口：联网搜索 → 提取 4 维度宏观事实
+    """A0 层主入口: 联网搜索 -> 提取 4 维度宏观事实
 
-    依赖 ctx 中的：
-    - raw_doc.company_overview（公司业务描述）
-    - tags（A1 层的 CompanyTags，包含行业标签）
-    - financials（B 层数据，用于提取原材料/下游信息）
+    依赖 ctx 中的: 
+    - raw_doc.company_overview (公司业务描述) 
+    - tags (A1 层的 CompanyTags，包含行业标签) 
+    - financials (B 层数据，用于提取原材料/下游信息) 
 
     Returns:
-        客观事实文本列表（跨 4 维度展平），供 D1 路2 使用
+        客观事实文本列表 (跨 4 维度展平) ，供 D1 路2 使用
     """
-    # 准备上下文变量（调度器保证 raw_doc / tags / financials 已就绪）
+    # 准备上下文变量 (调度器保证 raw_doc / tags / financials 已就绪) 
     business_desc = ctx.raw_doc.company_overview.business_description or ""
     industry_tags = _format_industry_tags(ctx.tags)
     year = str(ctx.raw_doc.metadata.report_year or ctx.financials.year)
 
-    # 步骤1：生成搜索词
+    # 步骤1: 生成搜索词
     search_queries = _generate_search_queries(
         business_desc=business_desc,
         industry_tags=industry_tags,
@@ -56,10 +56,10 @@ def run_macro_search(ctx: PipelineContext) -> list[str]:
         logger.warning("A0: 未生成任何搜索词")
         return []
 
-    # 步骤2：执行搜索 + 提取事实（无 SerpAPI Key 时 LLM 知识兜底）
+    # 步骤2: 执行搜索 + 提取事实 (无 SerpAPI Key 时 LLM 知识兜底) 
     all_search_results = _execute_searches(search_queries)
 
-    # 步骤3：LLM 提取事实
+    # 步骤3: LLM 提取事实
     facts = _extract_facts(
         business_desc=business_desc,
         industry_tags=industry_tags,
@@ -72,7 +72,7 @@ def run_macro_search(ctx: PipelineContext) -> list[str]:
 
 
 # ────────────────────────────────────────
-# 步骤1：生成搜索词
+# 步骤1: 生成搜索词
 # ────────────────────────────────────────
 
 def _generate_search_queries(
@@ -80,7 +80,7 @@ def _generate_search_queries(
     industry_tags: str,
     year: str,
 ) -> list[str]:
-    """调用 LLM 生成 4 维度搜索关键词（失败即终止，不做降级）"""
+    """调用 LLM 生成 4 维度搜索关键词 (失败即终止，不做降级) """
     from llm.client import LLMClient
 
     client = LLMClient()
@@ -111,21 +111,21 @@ def _generate_search_queries(
 
 
 # ────────────────────────────────────────
-# 步骤2：SerpAPI 搜索
+# 步骤2: SerpAPI 搜索
 # ────────────────────────────────────────
 
 def _execute_searches(queries: list[str]) -> str:
-    """批量执行 SerpAPI 搜索，合并结果（无 Key 时走 LLM 知识兜底）"""
+    """批量执行 SerpAPI 搜索，合并结果 (无 Key 时走 LLM 知识兜底) """
     if not SERPAPI_KEY:
         logger.info("SERPAPI_KEY 未设置，将使用 LLM 行业知识生成宏观事实")
-        return "（无联网搜索结果，请基于自身行业知识按四个维度输出宏观事实）"
+        return " (无联网搜索结果，请基于自身行业知识按四个维度输出宏观事实) "
 
     try:
         import urllib.request
         import urllib.parse
     except ImportError:
         logger.warning("urllib 不可用，使用 LLM 知识兜底")
-        return "（无联网搜索结果，请基于自身行业知识按四个维度输出宏观事实）"
+        return " (无联网搜索结果，请基于自身行业知识按四个维度输出宏观事实) "
 
     all_snippets = []
 
@@ -156,7 +156,7 @@ def _execute_searches(queries: list[str]) -> str:
             continue
 
     if not all_snippets:
-        return "（无联网搜索结果，请基于自身行业知识按四个维度输出宏观事实）"
+        return " (无联网搜索结果，请基于自身行业知识按四个维度输出宏观事实) "
 
     # 合并为文本
     combined = "\n\n---\n\n".join(all_snippets)
@@ -166,7 +166,7 @@ def _execute_searches(queries: list[str]) -> str:
 
 
 # ────────────────────────────────────────
-# 步骤3：提取事实
+# 步骤3: 提取事实
 # ────────────────────────────────────────
 
 def _extract_facts(
@@ -175,7 +175,7 @@ def _extract_facts(
     year: str,
     search_results: str,
 ) -> list[str]:
-    """调用 LLM 从搜索结果中提取 4 维度客观事实（失败即终止）"""
+    """调用 LLM 从搜索结果中提取 4 维度客观事实 (失败即终止) """
     from llm.client import LLMClient
 
     client = LLMClient()
@@ -203,7 +203,7 @@ def _extract_facts(
                     source = item.get("来源", item.get("source", ""))
                     date = item.get("日期", item.get("date", ""))
                     if fact_text:
-                        facts.append(f"[{dim_key[3:]}] {fact_text}（{source}, {date}）")
+                        facts.append(f"[{dim_key[3:]}] {fact_text} ({source}, {date}) ")
 
     return facts
 

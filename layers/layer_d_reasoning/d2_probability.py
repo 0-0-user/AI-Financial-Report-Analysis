@@ -1,19 +1,19 @@
-"""D2层：D-S 证据理论概率分配
+"""D2层: D-S 证据理论概率分配
 
-职责：
-- 对 D1 每个异常的 lookups（路1）+ hypotheses（路2）进行 D-S 证据理论合成
-- 输出归因概率（所有概率之和 = 1.0）
+职责: 
+- 对 D1 每个异常的 lookups (路1) + hypotheses (路2) 进行 D-S 证据理论合成
+- 输出归因概率 (所有概率之和 = 1.0) 
 - 保留 D-S 元数据供分析
 
-核心流程（纯数学 + 一次轻量 LLM 调用）：
+核心流程 (纯数学 + 一次轻量 LLM 调用) : 
   Step 0 — LLM 语义合并 + 冲突检测
-  Step 1 — 构建路1 mass m₁（ε₁=0.35）
-  Step 2 — 构建路2 mass m₂（ε₂=0.30）
+  Step 1 — 构建路1 mass m₁ (ε₁=0.35) 
+  Step 2 — 构建路2 mass m₂ (ε₂=0.30) 
   Step 3 — Dempster 合成
   Step 4 — Pignistic 转概率
 
-原则：
-- LLM 只做语义理解（合并+冲突判断），不做数学运算
+原则: 
+- LLM 只做语义理解 (合并+冲突判断) ，不做数学运算
 - mass 分配和合成全是代码计算
 - LLM 失败时不做合并，各自独立运行
 """
@@ -36,7 +36,7 @@ _THRESHOLDS_PATH = Path("config/thresholds.yaml")
 
 
 # ────────────────────────────────────────────
-# 参数加载（从 config/thresholds.yaml 读取）
+# 参数加载 (从 config/thresholds.yaml 读取) 
 # ────────────────────────────────────────────
 
 def _get_d2_config() -> dict:
@@ -73,7 +73,7 @@ def run_probability_allocation(
 ) -> list[ProbabilityAssignment]:
     """对每个异常进行 D-S 证据理论概率分配
 
-    输入每条 reasoning_result 的格式：
+    输入每条 reasoning_result 的格式: 
     {
         "source": "B+" | "C",
         "anomaly": LogicAnomaly | DeviationAnomaly,
@@ -83,11 +83,11 @@ def run_probability_allocation(
 
     Args:
         reasoning_results: D1 双路径结果列表
-        macro_facts: 宏观事实（保留兼容，新 D2 不使用）
-        tags: 行业标签（保留兼容，新 D2 不使用）
+        macro_facts: 宏观事实 (保留兼容，新 D2 不使用) 
+        tags: 行业标签 (保留兼容，新 D2 不使用) 
 
     Returns:
-        ProbabilityAssignment 列表（含 ds_metadata）
+        ProbabilityAssignment 列表 (含 ds_metadata) 
     """
     assignments: list[ProbabilityAssignment] = []
 
@@ -100,12 +100,12 @@ def run_probability_allocation(
         # ── Step 0: LLM 语义合并 + 冲突检测 ──
         merged_causes = _llm_merge_conflict(indicator, lookups, hypotheses)
 
-        # ── Step 1: 构建 m₁（路1 mass） ──
+        # ── Step 1: 构建 m₁ (路1 mass)  ──
         path1_causes = [m for m in merged_causes if m["path1_indices"]]
         cfg = _get_d2_config()
         m1 = _build_m1(path1_causes, epsilon_1=cfg["epsilon_1"])
 
-        # ── Step 2: 构建 m₂（路2 mass） ──
+        # ── Step 2: 构建 m₂ (路2 mass)  ──
         path2_causes = [m for m in merged_causes if m["path2_indices"]]
         m2 = _build_m2(path2_causes, hypotheses, epsilon_2=cfg["epsilon_2"], top_n=cfg["path2_top_n"])
 
@@ -156,14 +156,14 @@ def _llm_merge_conflict(
 ) -> list[dict]:
     """调用 LLM 进行语义合并和冲突检测
 
-    输入：路1解释列表 + 路2假设列表
-    输出：merged_causes 列表，每条含：
+    输入: 路1解释列表 + 路2假设列表
+    输出: merged_causes 列表，每条含: 
         - name: 统一归因名称
         - path1_indices: 对应 lookups 的下标列表
         - path2_indices: 对应 hypotheses 的下标列表
         - conflicts_with: 与之冲突的归因名称列表
 
-    LLM 失败时返回不合并的默认结构（各自独立，无冲突）。
+    LLM 失败时返回不合并的默认结构 (各自独立，无冲突) 。
     """
     if not lookups and not hypotheses:
         return []
@@ -245,7 +245,7 @@ def _parse_merge_result(raw: str) -> list[dict] | None:
     return valid if valid else None
 
 # ════════════════════════════════════════════
-# Step 1: 构建 m₁（路1 mass）
+# Step 1: 构建 m₁ (路1 mass) 
 # ════════════════════════════════════════════
 
 def _build_m1(
@@ -255,16 +255,16 @@ def _build_m1(
 ) -> dict[str, float]:
     """构建路1 mass 函数
 
-    k=0（空）：m₁(Θ) = 1.0
-    k=1：      m₁({E}) = 1-ε₁,  m₁(Θ) = ε₁
-    k=2：      m₁({E₁}) = (1-ε₁)×split_primary,  m₁({E₂}) = (1-ε₁)×(1-split_primary),  m₁(Θ) = ε₁
-    k≥3：      (1-ε₁) 按指数衰减分配
+    k=0 (空) : m₁(Θ) = 1.0
+    k=1:       m₁({E}) = 1-ε₁,  m₁(Θ) = ε₁
+    k=2:       m₁({E₁}) = (1-ε₁)xsplit_primary,  m₁({E₂}) = (1-ε₁)x(1-split_primary),  m₁(Θ) = ε₁
+    k>=3:       (1-ε₁) 按指数衰减分配
     """
     m1: dict[str, float] = {}
     k = len(path1_causes)
 
     if k == 0:
-        # 空结果：全部 uncertainty
+        # 空结果: 全部 uncertainty
         return {"Θ": 1.0}
 
     pool = 1.0 - epsilon_1
@@ -275,7 +275,7 @@ def _build_m1(
         m1[path1_causes[0]["name"]] = pool * split_primary
         m1[path1_causes[1]["name"]] = pool * (1.0 - split_primary)
     else:
-        # k≥3：指数衰减，依次占 pool 的 1/2, 1/4, 1/8...
+        # k>=3: 指数衰减，依次占 pool 的 1/2, 1/4, 1/8...
         remaining = pool
         for i, cause in enumerate(path1_causes):
             if i == k - 1:
@@ -291,7 +291,7 @@ def _build_m1(
 
 
 # ════════════════════════════════════════════
-# Step 2: 构建 m₂（路2 mass）
+# Step 2: 构建 m₂ (路2 mass) 
 # ════════════════════════════════════════════
 
 def _build_m2(
@@ -302,10 +302,10 @@ def _build_m2(
 ) -> dict[str, float]:
     """构建路2 mass 函数
 
-    - 空：m₂(Θ) = 1.0
-    - 有结果：取 consensus_weight 前 top_n 名
-      consensus_weight = source_authority × source_count_bonus
-      归一化后 m({H_j}) = norm_cw × (1-ε₂)
+    - 空: m₂(Θ) = 1.0
+    - 有结果: 取 consensus_weight 前 top_n 名
+      consensus_weight = source_authority x source_count_bonus
+      归一化后 m({H_j}) = norm_cw x (1-ε₂)
     """
     m2: dict[str, float] = {}
     k = len(path2_causes)
@@ -342,7 +342,7 @@ def _calc_consensus_weight(
 ) -> float:
     """计算合并归因的 consensus_weight
 
-    consensus_weight = source_authority × source_count_bonus
+    consensus_weight = source_authority x source_count_bonus
 
     source_authority 取该归因涉及的所有路2假设中最高权威性。
     source_count_bonus 基于独立来源数量。
@@ -361,7 +361,7 @@ def _calc_consensus_weight(
         h = original_hypotheses[idx]
         source_str = getattr(h, "source", "") or ""
 
-        # 拆分为独立来源标签（"、" 分隔）
+        # 拆分为独立来源标签 ("、" 分隔) 
         parts = re.split(r"[、,，/]", source_str)
         for part in parts:
             part = part.strip()
@@ -433,7 +433,7 @@ def _dempster_combine(
     """Dempster 合成两个 evidence 源的 mass 函数
 
     只有在 conflict_map 中标记为冲突的归因对才会产生 K。
-    非冲突的不同归因之间的交叉项归入 Θ（不确定性）。
+    非冲突的不同归因之间的交叉项归入 Θ (不确定性) 。
     Θ 作为全集，与其他任何子集的交为该子集本身。
 
     Args:
@@ -461,7 +461,7 @@ def _dempster_combine(
             if elem1 == elem2 and elem1 != "Θ":
                 m_total[elem1] += product
 
-            # —— 一方是 Θ（全集），另一方保留原样 ——
+            # —— 一方是 Θ (全集) ，另一方保留原样 ——
             elif elem1 == "Θ" and elem2 != "Θ":
                 m_total[elem2] += product
             elif elem2 == "Θ" and elem1 != "Θ":
@@ -475,11 +475,11 @@ def _dempster_combine(
             elif _is_explicit_conflict(elem1, elem2, conflict_map):
                 K += product
 
-            # —— 非冲突的不同归因 → 归入 uncertainty ——
+            # —— 非冲突的不同归因 -> 归入 uncertainty ——
             else:
                 m_total["Θ"] += product
 
-    # 归一化（去除冲突 K）
+    # 归一化 (去除冲突 K) 
     norm = 1.0 - K
     if norm <= 1e-10:
         # 完全冲突
@@ -512,7 +512,7 @@ def _is_explicit_conflict(
 def _pignistic_transform(mass_final: dict[str, float]) -> dict[str, float]:
     """将合成后的 mass 转为概率分布
 
-    公式：prob(A) = m_total(A) / (1 - m_total(Θ))
+    公式: prob(A) = m_total(A) / (1 - m_total(Θ))
 
     将 Θ 的质量按比例分摊到各归因，保证 Σ = 1.0。
     """
@@ -550,7 +550,7 @@ def _build_ds_metadata(
     merged_causes: list[dict],
     conflict_threshold: float = 0.60,
 ) -> dict:
-    """构建 D-S 元数据（用于调试和分析）"""
+    """构建 D-S 元数据 (用于调试和分析) """
     merged_summary = []
     for cause in merged_causes:
         merged_summary.append({

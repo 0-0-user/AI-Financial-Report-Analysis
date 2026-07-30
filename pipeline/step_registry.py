@@ -6,12 +6,12 @@
 各层通过 @registry.register("layer_xxx") 装饰器注册自己的入口函数。
 Orchestrator 不需要直接 import 各层，而是通过 registry 查找。
 
-这种设计的好处：
-- 解耦：Orchestrator 不关心各层的具体实现
-- 可插拔：可以替换某一层的实现而不影响其他层
-- 可跳过：Orchestrator 通过 registry 知道所有已注册的步骤
+这种设计的好处: 
+- 解耦: Orchestrator 不关心各层的具体实现
+- 可插拔: 可以替换某一层的实现而不影响其他层
+- 可跳过: Orchestrator 通过 registry 知道所有已注册的步骤
 
-使用方式：
+使用方式: 
     @registry.register("layer_b")
     def run(ctx):
         # 实现代码
@@ -29,7 +29,7 @@ class StepRegistry:
         self._requirements: dict[str, list[str]] = {}
 
     def register(self, name: str, *, requires: list[str] | None = None) -> Callable:
-        """装饰器：注册一个步骤
+        """装饰器: 注册一个步骤
 
         Args:
             name: 步骤名称

@@ -1,4 +1,4 @@
-"""C层：算偏差（MAD算法）"""
+"""C层: 算偏差 (MAD算法) """
 
 from pipeline.step_registry import registry
 from pipeline.context import PipelineContext

@@ -1,4 +1,4 @@
-"""第0层：PDF数据提取 — 将年报PDF解析为结构化JSON"""
+"""第0层: PDF数据提取 — 将年报PDF解析为结构化JSON"""
 
 from pipeline.step_registry import registry
 from pipeline.context import PipelineContext
@@ -19,7 +19,7 @@ def run(ctx: PipelineContext) -> None:
     parser = PDFParser(pdf_path)
     raw_data = parser.extract()
 
-    # OCR 纠错（v2: 提高扫描件准确率）
+    # OCR 纠错 (v2: 提高扫描件准确率) 
     raw_data = correct_raw_document(raw_data)
 
     chunker = DocumentChunker(raw_data)

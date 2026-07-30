@@ -1,14 +1,14 @@
-"""D3层：语义关键词硬性匹配——将D层原因描述映射为语义影响分
+"""D3层: 语义关键词硬性匹配——将D层原因描述映射为语义影响分
 
-职责：
+职责: 
 - 加载 config/semantic_scoring.yaml 语义评分库
 - 对 ProbabilityAssignment 中的每条原因描述，调用 LLM 做关键词匹配
 - 匹配结果写入 semantic_scores 和 semantic_keywords 字段
 
-匹配策略：
+匹配策略: 
 - LLM 左手接收完整原因描述 + 概率，右手仅限语义库中的关键词
-- 取最严重匹配原则：同时匹配多个级别时取 score_base 最低的
-- 失败即终止：LLM 调用或匹配失败直接抛异常
+- 取最严重匹配原则: 同时匹配多个级别时取 score_base 最低的
+- 失败即终止: LLM 调用或匹配失败直接抛异常
 """
 
 import json

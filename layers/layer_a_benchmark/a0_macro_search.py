@@ -80,22 +80,18 @@ def _generate_search_queries(
     industry_tags: str,
     year: str,
 ) -> list[str]:
-    """调用 LLM 生成 4 维度搜索关键词"""
+    """调用 LLM 生成 4 维度搜索关键词（失败即终止，不做降级）"""
     from llm.client import LLMClient
 
     client = LLMClient()
-    try:
-        response = client.chat(
-            "a0_search_query",
-            {
-                "business_desc": business_desc,
-                "industry_tags": industry_tags,
-                "year": year,
-            },
-        )
-    except Exception as e:
-        logger.warning(f"A0 生成搜索词失败: {e}")
-        return _fallback_search_queries(business_desc, industry_tags)
+    response = client.chat(
+        "a0_search_query",
+        {
+            "business_desc": business_desc,
+            "industry_tags": industry_tags,
+            "year": year,
+        },
+    )
 
     raw = response if isinstance(response, str) else str(response)
     data = _parse_json(raw)
@@ -108,21 +104,9 @@ def _generate_search_queries(
             queries.extend(dim_queries)
 
     if not queries:
-        return _fallback_search_queries(business_desc, industry_tags)
+        raise RuntimeError(f"A0 搜索词生成为空: LLM 输出 {raw[:200]}")
 
     logger.info(f"A0 生成 {len(queries)} 条搜索词")
-    return queries
-
-
-def _fallback_search_queries(business_desc: str, industry_tags: str) -> list[str]:
-    """搜索词生成的降级方案（不依赖 LLM）"""
-    queries = []
-    # 从业务描述中提取关键行业词
-    industry_kw = industry_tags or business_desc[:50]
-    queries.append(f"{industry_kw} 行业政策 今年")
-    queries.append(f"{industry_kw} 原材料价格 今年")
-    queries.append(f"{industry_kw} 市场需求 销量 今年")
-    queries.append(f"{industry_kw} 行业 风险 事件 今年")
     return queries
 
 
@@ -191,23 +175,19 @@ def _extract_facts(
     year: str,
     search_results: str,
 ) -> list[str]:
-    """调用 LLM 从搜索结果中提取 4 维度客观事实"""
+    """调用 LLM 从搜索结果中提取 4 维度客观事实（失败即终止）"""
     from llm.client import LLMClient
 
     client = LLMClient()
-    try:
-        response = client.chat(
-            "a0_macro_facts",
-            {
-                "business_desc": business_desc,
-                "industry_tags": industry_tags,
-                "year": year,
-                "search_results": search_results,
-            },
-        )
-    except Exception as e:
-        logger.warning(f"A0 提取事实失败: {e}")
-        return []
+    response = client.chat(
+        "a0_macro_facts",
+        {
+            "business_desc": business_desc,
+            "industry_tags": industry_tags,
+            "year": year,
+            "search_results": search_results,
+        },
+    )
 
     raw = response if isinstance(response, str) else str(response)
     data = _parse_json(raw)

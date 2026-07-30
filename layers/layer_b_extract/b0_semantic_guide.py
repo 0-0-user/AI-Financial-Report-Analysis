@@ -10,16 +10,12 @@ v2 新增：
 import json
 import logging
 import re
-import yaml
-from pathlib import Path
 from typing import Optional
 
 from schemas.raw_doc import RawDocument, RawTableRow
 from schemas.b0_guide import B0Guide, TableGuide, FieldMapping, ColumnHeader
 
 logger = logging.getLogger(__name__)
-
-FIELDS_CONFIG_PATH = Path("config/financial_fields.yaml")
 
 # ── 中文列名 → 标准名 ──
 COLUMN_ALIASES: dict[str, str] = {
@@ -88,12 +84,8 @@ def _process_one_table(table_name: str, rows: list[RawTableRow]) -> Optional[Tab
     # 2. 提取多级表头
     header_info = _parse_multi_level_header(rows, is_row_major)
 
-    # 3. 字段映射
-    try:
-        return _llm_guide(table_name, header_info, rows, is_row_major)
-    except Exception as e:
-        logger.warning(f"LLM 表头识别失败，降级规则匹配: {e}")
-        return _rule_based_guide(table_name, header_info, rows, is_row_major)
+    # 3. 字段映射（LLM 识别，失败则异常传播——不做降级）
+    return _llm_guide(table_name, header_info, rows, is_row_major)
 
 
 # ═══════════════════════════════════════════════
@@ -275,173 +267,3 @@ def _parse_llm_response(raw: str) -> dict:
             except json.JSONDecodeError:
                 pass
         return {}
-
-
-# ═══════════════════════════════════════════════
-# 规则降级（含英文 + 跨行业字段）
-# ═══════════════════════════════════════════════
-
-def _rule_based_guide(
-    table_name: str, header_info: dict,
-    all_rows: list[RawTableRow], is_row_major: bool,
-) -> TableGuide:
-    """规则匹配：中文 + 英文变体全覆盖"""
-    if not FIELDS_CONFIG_PATH.exists():
-        return _empty_guide(table_name, header_info)
-
-    with open(FIELDS_CONFIG_PATH, encoding="utf-8") as f:
-        field_config = yaml.safe_load(f)
-    fields = field_config.get("fields", {})
-    english_aliases = field_config.get("field_english_aliases", {})
-    small_aliases = field_config.get("small_enterprise_aliases", {})
-
-    field_mappings = []
-    data_rows = all_rows[header_info["data_start_row"]:]
-    col_idx = header_info.get("field_col_index", 0)
-    value_cols = header_info.get("value_col_indices", [1, 2])
-
-    for row in data_rows:
-        row_text = " ".join(str(v) for v in row.columns.values())
-        row_text_lower = row_text.lower()
-
-        # 匹配标准字段（中文变体 + 英文变体）
-        best_match = _find_best_field_match(row_text_lower, fields, english_aliases)
-        if best_match:
-            field_mappings.append(FieldMapping(
-                raw_name=best_match[0], standard_name=best_match[1],
-                row_index=row.row_index,
-                col_index=value_cols[0] if value_cols else 1,
-                unit=header_info["unit"],
-            ))
-            continue  # 已匹配，不重复
-
-        # 匹配小微企业简版别名
-        for cn_name, std_name in small_aliases.items():
-            if cn_name in row_text and std_name not in {fm.standard_name for fm in field_mappings}:
-                field_mappings.append(FieldMapping(
-                    raw_name=cn_name, standard_name=std_name,
-                    row_index=row.row_index,
-                    col_index=value_cols[0] if value_cols else 1,
-                    unit=header_info["unit"],
-                ))
-
-    columns = []
-    for i, col_idx_v in enumerate(value_cols):
-        cn = f"数值列{i+1}"
-        columns.append(ColumnHeader(index=col_idx_v, raw_text=cn, standard_name=f"value_{i}"))
-
-    return TableGuide(
-        table_name=table_name,
-        report_type=header_info["report_type"],
-        overall_unit=header_info["unit"],
-        columns=columns,
-        field_mappings=field_mappings,
-        layout=header_info["layout"],
-    )
-
-
-# ═══════════════════════════════════════════════
-# 模糊匹配（OCR 纠错后的二次保障）
-# ═══════════════════════════════════════════════
-
-# ── 模糊匹配：预建 variant→standard_name 索引，O(1) 查找 ──
-_VARIANT_INDEX: dict[str, str] | None = None  # {variant_lower: standard_name}
-
-
-def _build_variant_index(fields: dict, english_aliases: dict) -> dict[str, str]:
-    """预建 variant→standard_name 反向索引，避免 O(fields×variants) 内层循环"""
-    global _VARIANT_INDEX
-    if _VARIANT_INDEX is not None:
-        return _VARIANT_INDEX
-    idx: dict[str, str] = {}
-    for std_name, f_info in fields.items():
-        for v in f_info.get("chinese_variants", []):
-            idx[v.lower()] = std_name
-        for v in english_aliases.get(std_name, []):
-            idx[v.lower()] = std_name
-    _VARIANT_INDEX = idx
-    return idx
-
-
-def _find_best_field_match(
-    row_text: str, fields: dict, english_aliases: dict,
-) -> tuple[str, str] | None:
-    """O(tokens) 字段匹配（预建索引 + 提前截断）
-
-    策略：
-    1. 精确子串 → 遍历 tokens，查 variant_index (O(1) each)
-    2. 模糊匹配 → Levenshtein ≤ 2 且 best_score 提前截断
-    """
-    import re
-    tokens = re.split(r'[\s\|,，;；、。]+', row_text)
-    idx = _build_variant_index(fields, english_aliases)
-
-    # 第1轮：O(tokens) 精确匹配
-    for token in tokens:
-        token = token.strip().lower()
-        if len(token) < 2:
-            continue
-        if token in idx:
-            return (token, idx[token])
-        # 子串匹配（token 含在 variant 中）
-        for variant, std_name in idx.items():
-            if token in variant or variant in token:
-                return (variant, std_name)
-
-    # 第2轮：模糊匹配（Levenshtein ≤ 2，提前截断）
-    best_score = 3
-    best_match = None
-    for token in tokens:
-        token = token.strip()
-        if len(token) < 3 or len(token) > 12:
-            continue
-        for variant, std_name in idx.items():
-            if abs(len(token) - len(variant)) > 2:
-                continue  # 长度差 > 2 → 至少需要 3 次编辑，直接跳过
-            score = _levenshtein_cutoff(token, variant, 2)
-            if score < best_score:
-                best_score = score
-                best_match = (variant, std_name)
-                if score == 0:
-                    return best_match  # 完全匹配，无需继续
-
-    return best_match
-
-
-def _levenshtein_cutoff(a: str, b: str, max_dist: int) -> int:
-    """Levenshtein 带提前截断：一旦距离超 max_dist 立即返回 999
-
-    O(n*m) 最坏，但长度差 > max_dist 或中途超阈值时提前退出。
-    对比原始实现，模糊匹配阶段平均快 3-5×。
-    """
-    if abs(len(a) - len(b)) > max_dist:
-        return 999
-    if len(a) < len(b):
-        a, b = b, a
-    if len(b) == 0:
-        return len(a)
-
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, 1):
-        curr = [i]
-        row_min = i
-        for j, cb in enumerate(b, 1):
-            cost = prev[j] + 1 if ca != cb else prev[j - 1]
-            if ca == cb:
-                cost = prev[j - 1]
-            else:
-                cost = 1 + min(prev[j], curr[j - 1], prev[j - 1])
-            curr.append(cost)
-            row_min = min(row_min, cost)
-        if row_min > max_dist:
-            return 999
-        prev = curr
-    return prev[-1]
-
-
-def _empty_guide(table_name: str, header_info: dict) -> TableGuide:
-    return TableGuide(
-        table_name=table_name, report_type=header_info["report_type"],
-        overall_unit=header_info["unit"], columns=[], field_mappings=[],
-        layout=header_info["layout"],
-    )

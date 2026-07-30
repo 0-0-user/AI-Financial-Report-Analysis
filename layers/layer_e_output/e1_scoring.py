@@ -1,18 +1,19 @@
-"""E1层：综合置信度打分——纯代码计算
+"""E1层：基于 D-S 融合概率的「语义冲突调节评分系统」
 
-评分公式（来自架构文档）：
-    最终得分 = 100 - (C层扣分 + B+层扣分)
+评分公式（新）：
+    Score_j = W_phe_j × (1 - K_j) × Σ_i P_j(H_i) × S_base(H_i)
 
-C层扣分：
-    实际影响权重 = 基础影响权重 × (1 + MAD偏离度 / 3)
-    期望影响 = Σ(归因概率 × 实际影响权重)
-    C层扣分 = Σ(期望影响 × MAD偏离度)
+    C层偏差: W_phe = min(mad_multiple / 3, 5.0)
+    B+异常:  W_phe = severity（直接用，范围0.5-5.0）
 
-B+层扣分：
-    B+层扣分 = Σ(造假权重 × 严重度修正系数)
-    其中造假权重 = -3, 行业性质权重 = 0
+    Total_deduction = Σ_j Score_j
+    Final = 100 + Total_deduction   # 允许负数
 
-权重来源：config/weights.yaml
+数据来源：
+    - W_phe: B+层 severity / C层 mad_multiple
+    - K:     D2 层 D-S 证据理论的冲突系数
+    - P(H):  D2 层 pignistic 概率分布
+    - S_base: D3 层语义关键词匹配结果
 """
 
 import logging
@@ -22,8 +23,9 @@ from typing import Optional
 import yaml
 
 from pipeline.context import PipelineContext
-from schemas.report import ScoreBreakdown
+from schemas.report import ScoreBreakdown, AnomalyScoreDetail, CauseDetail
 from schemas.tags import HardTag
+from schemas.anomaly import LogicAnomaly, DeviationAnomaly
 
 logger = logging.getLogger(__name__)
 
@@ -31,194 +33,155 @@ WEIGHTS_PATH = Path("config/weights.yaml")
 
 
 # ────────────────────────────────────────────
-# 权重加载
-# ────────────────────────────────────────────
-
-def _load_weights() -> dict:
-    """加载权重配置"""
-    if not WEIGHTS_PATH.exists():
-        logger.warning(f"权重文件不存在: {WEIGHTS_PATH}，使用空配置")
-        return {"weights": {}, "overrides": []}
-    with open(WEIGHTS_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def _get_base_weight(indicator: str, hard_tags: Optional[list[HardTag]] = None) -> float:
-    """获取某指标的 base_weight，考虑行业 overrides
-
-    Args:
-        indicator: 标准指标名
-        hard_tags: 公司的硬标签列表（用于行业特殊规则）
-
-    Returns:
-        base_weight（已应用行业覆盖）
-    """
-    config = _load_weights()
-    weights = config.get("weights", {})
-    indicator_config = weights.get(indicator, {})
-
-    if not indicator_config:
-        logger.debug(f"指标 {indicator} 未在权重库中定义，使用默认值 -1")
-        return -1.0  # 默认视为利空
-
-    base = indicator_config.get("base_weight", -1.0)
-
-    # 检查行业覆盖规则
-    if hard_tags:
-        overrides = config.get("overrides", [])
-        for override in overrides:
-            override_industries = override.get("industries", [])
-            override_indicator = override.get("indicator", "")
-            if override_indicator == indicator:
-                for ht in hard_tags:
-                    if ht.value in override_industries:
-                        overridden = override.get("base_weight", base)
-                        logger.debug(f"应用行业覆盖: {ht.value} → {indicator} 权重 {base}→{overridden}")
-                        return overridden
-
-    return base
-
-
-def _get_amplification_cap(indicator: str) -> float:
-    """获取放大系数上限"""
-    config = _load_weights()
-    weights = config.get("weights", {})
-    indicator_config = weights.get(indicator, {})
-    return indicator_config.get("amplification_cap", 3.0)
-
-
-# ────────────────────────────────────────────
 # 主入口
 # ────────────────────────────────────────────
 
 def run_scoring(ctx: PipelineContext) -> ScoreBreakdown:
-    """计算最终置信度得分
+    """计算最终置信度得分（新公式：语义冲突调节评分）
 
-    纯数学计算，不涉及 LLM，不依赖外部 API。
+    流程：
+    1. 遍历 B+ 层和 C 层所有异常
+    2. 对每个异常，匹配 D 层推理结果
+    3. 计算单异常扣分 Score_j
+    4. 汇总得到最终得分
     """
-    base = 100.0
-    c_deduction = _calc_c_layer_deduction(ctx)
-    bplus_deduction = _calc_bplus_layer_deduction(ctx)
+    anomaly_details: list[AnomalyScoreDetail] = []
 
-    final = max(0.0, base - c_deduction - bplus_deduction)
+    # 处理 B+ 层异常
+    if ctx.logic_anomalies:
+        for anomaly in ctx.logic_anomalies:
+            detail = _score_one_anomaly(
+                indicator=anomaly.check_name,
+                source="B+",
+                w_phe=anomaly.severity,
+                reasoning_results=ctx.reasoning_results or [],
+            )
+            if detail is not None:
+                anomaly_details.append(detail)
+
+    # 处理 C 层偏差异常
+    if ctx.deviations:
+        for dev in ctx.deviations:
+            w_phe = _calc_c_w_phe(dev.mad_multiple)
+            detail = _score_one_anomaly(
+                indicator=dev.indicator,
+                source="C",
+                w_phe=w_phe,
+                reasoning_results=ctx.reasoning_results or [],
+            )
+            if detail is not None:
+                anomaly_details.append(detail)
+
+    total_deduction = sum(d.anomaly_score for d in anomaly_details)
+    final_score = 100.0 + total_deduction  # 允许负数
 
     return ScoreBreakdown(
-        base_score=base,
-        c_layer_deduction=round(c_deduction, 2),
-        bplus_layer_deduction=round(bplus_deduction, 2),
-        final_score=round(final, 2),
+        base_score=100.0,
+        anomaly_details=anomaly_details,
+        total_deduction=round(total_deduction, 2),
+        final_score=round(final_score, 2),
     )
 
 
 # ────────────────────────────────────────────
-# C 层扣分计算
+# 单异常评分
 # ────────────────────────────────────────────
 
-def _calc_c_layer_deduction(ctx: PipelineContext) -> float:
-    """计算 C 层扣分
+def _score_one_anomaly(
+    indicator: str,
+    source: str,
+    w_phe: float,
+    reasoning_results: list,
+) -> Optional[AnomalyScoreDetail]:
+    """计算单个异常的扣分
 
-    公式：
-    - 对每个偏差异常指标:
-        实际影响权重 = base_weight × (1 + mad_multiple / 3)
-        期望影响 = Σ(归因概率 × 实际影响权重)
-        扣分 = 期望影响 × mad_multiple
+    公式：Score_j = W_phe × (1 - K) × Σ P × S_base
     """
-    if not ctx.deviations or not ctx.reasoning_results:
-        return 0.0
+    # 查找匹配的 D 层推理结果
+    reasoning = _find_reasoning(reasoning_results, indicator, source)
+    if reasoning is None:
+        return None
 
-    hard_tags = ctx.tags.hard_tags if ctx.tags else None
-    deduction = 0.0
+    # K 值（D-S 冲突系数）
+    ds_meta = reasoning.ds_metadata or {}
+    k_value = ds_meta.get("conflict_K", 0.0)
+    delta = 1.0 - k_value
 
-    # 将 reasoning_results 按 anomaly_indicator 建立索引
-    reasoning_by_indicator: dict[str, dict] = {}
-    for rr in ctx.reasoning_results:
-        reasoning_by_indicator[rr.anomaly_indicator] = {
-            "probabilities": rr.probabilities,
-        }
+    # 各归因原因的影响分
+    probabilities = reasoning.probabilities or {}
+    semantic_scores = reasoning.semantic_scores or {}
+    semantic_keywords = reasoning.semantic_keywords or {}
 
-    for dev in ctx.deviations:
-        indicator = dev.indicator
-        base_weight = _get_base_weight(indicator, hard_tags)
-        cap = _get_amplification_cap(indicator)
+    causes_detail: list[CauseDetail] = []
+    weighted_sum = 0.0
 
-        # 放大系数：偏离越大，权重越重（但有上限）
-        amplification = 1 + dev.mad_multiple / 3
-        amplification = min(amplification, cap)
-        effective_weight = base_weight * amplification
+    for cause, prob in probabilities.items():
+        # S_base: D3 语义匹配结果，没有则默认 -1
+        score_base = semantic_scores.get(cause, -1)
+        matched_kws = semantic_keywords.get(cause, [])
 
-        # 概率加权期望影响
-        reasoning = reasoning_by_indicator.get(indicator, {})
-        probabilities = reasoning.get("probabilities", {})
+        # 有效影响值 = S_base × (1 - K)
+        effective_score = score_base * delta
+        weighted_sum += prob * effective_score
 
-        if not probabilities:
-            # 无归因时默认 -1 影响
-            expected_impact = effective_weight
-        else:
-            expected_impact = 0.0
-            for cause, prob in probabilities.items():
-                # 行业性质=0权重，造假=-3，其他按 base_weight
-                if "行业" in cause or "正常" in cause or "无风险" in cause:
-                    cause_weight = 0.0
-                elif "造假" in cause or "粉饰" in cause or "虚增" in cause:
-                    cause_weight = -3.0
-                else:
-                    cause_weight = effective_weight
-                expected_impact += prob * cause_weight
+        causes_detail.append(CauseDetail(
+            cause=cause,
+            probability=round(prob, 4),
+            score_base=score_base,
+            matched_keywords=matched_kws,
+            effective_score=round(score_base * delta, 4),
+        ))
 
-        # C层扣分 = 期望影响 × MAD偏离度
-        item_deduction = expected_impact * dev.mad_multiple
-        deduction += item_deduction
+    # 单异常扣分 = W_phe × Σ(P × S_base × (1-K))
+    anomaly_score = w_phe * weighted_sum
 
-    # 扣分取绝对值（base_weight 为负时 deduction 为正）
-    return abs(deduction)
+    return AnomalyScoreDetail(
+        indicator=indicator,
+        source=source,
+        w_phe=round(w_phe, 4),
+        k_value=round(k_value, 4),
+        delta=round(delta, 4),
+        causes=causes_detail,
+        anomaly_score=round(anomaly_score, 4),
+    )
 
 
 # ────────────────────────────────────────────
-# B+ 层扣分计算
+# C 层 W_phe 映射
 # ────────────────────────────────────────────
 
-def _calc_bplus_layer_deduction(ctx: PipelineContext) -> float:
-    """计算 B+ 层扣分
+def _calc_c_w_phe(mad_multiple: float) -> float:
+    """C 层偏差的严重性系数映射
 
-    公式：
-    - 造假权重默认 -3
-    - 行业性质权重 = 0
-    - 乘以严重度修正系数
+    W_phe = min(mad_multiple / 3, 5.0)
 
-    特殊处理：
-    - 如果 D 层归因指向"行业性质"，扣分降为 0
+    MAD=2.0  →  W_phe=0.67  (轻微异常)
+    MAD=5.0  →  W_phe=1.67  (一般异常)
+    MAD=10.0 →  W_phe=3.33  (严重异常)
+    MAD=15.0 →  W_phe=5.0   (极端异常，cap)
     """
-    if not ctx.logic_anomalies:
-        return 0.0
+    return min(mad_multiple / 3.0, 5.0)
 
-    deduction = 0.0
 
-    # 查找 D 层对 B+ 异常的归因
-    bplus_reasoning: dict[str, dict] = {}
-    if ctx.reasoning_results:
-        for rr in ctx.reasoning_results:
-            if rr.anomaly_source == "B+":
-                bplus_reasoning[rr.anomaly_indicator] = {
-                    "probabilities": rr.probabilities,
-                }
+# ────────────────────────────────────────────
+# 匹配 D 层推理结果
+# ────────────────────────────────────────────
 
-    for anomaly in ctx.logic_anomalies:
-        weight = -3.0  # 造假默认权重
+def _find_reasoning(
+    reasoning_results: list,
+    indicator: str,
+    source: str,
+) -> Optional:
+    """在 D 层推理结果中查找匹配的异常
 
-        # 检查归因中是否有"行业性质"
-        reasoning = bplus_reasoning.get(anomaly.check_name, {})
-        probabilities = reasoning.get("probabilities", {})
-
-        if probabilities:
-            for cause, prob in probabilities.items():
-                if "行业" in cause or "正常" in cause or "集团" in cause or "归集" in cause:
-                    # 该异常归因于行业性质 → 权重降为 0
-                    weight = 0.0
-                    break
-
-        # B+ 扣分 = 权重 × 严重度
-        severity = anomaly.severity
-        item_deduction = weight * severity
-        deduction += item_deduction
-
-    return abs(deduction)
+    匹配规则：
+    - 对 B+ 层: check_name == anomaly_indicator
+    - 对 C 层:  indicator == anomaly_indicator
+    """
+    for rr in reasoning_results:
+        if rr.anomaly_indicator == indicator and rr.anomaly_source == source:
+            return rr
+    # 无匹配：D 层可能没有对该异常进行推理
+    # 按"失败即终止"原则，理论上不应出现
+    logger.warning(f"未找到 D 层推理结果: indicator={indicator}, source={source}")
+    return None

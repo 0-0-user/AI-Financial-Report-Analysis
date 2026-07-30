@@ -59,3 +59,7 @@ class ProbabilityAssignment(BaseModel):
     probabilities: dict[str, float]              # 归因概率（pignistic 转换后，sum=1.0）
     reasoning_summary: Optional[str] = None      # 综合判断依据（已废弃，保留兼容）
     ds_metadata: Optional[dict] = None           # D-S 证据理论元数据
+
+    # D3 语义匹配结果（由 d3_semantic_matcher 填充）
+    semantic_scores: Optional[dict[str, int]] = None          # cause → score_base (-3~+2)
+    semantic_keywords: Optional[dict[str, list[str]]] = None  # cause → matched_keywords

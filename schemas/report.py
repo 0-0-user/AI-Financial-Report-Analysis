@@ -24,12 +24,32 @@ class PeerComparison(BaseModel):
     similarity_score: float                      # 相似度
 
 
+class CauseDetail(BaseModel):
+    """单个归因原因的影响明细"""
+    cause: str                               # 原因描述（用户看到的完整句子）
+    probability: float                       # D-S 融合概率
+    score_base: int                          # 语义定性分 (-3~+2)
+    matched_keywords: list[str]              # 匹配到的关键词（内部使用）
+    effective_score: float                   # 有效影响值 = score_base × (1-K)
+
+
+class AnomalyScoreDetail(BaseModel):
+    """单个异常指标的评分明细"""
+    indicator: str                           # 指标名
+    source: str                              # "B+" / "C"
+    w_phe: float                             # 现象严重性系数
+    k_value: float                           # D-S 冲突系数
+    delta: float                             # 1 - K
+    causes: list[CauseDetail]                # 各原因明细
+    anomaly_score: float                     # 该异常扣分
+
+
 class ScoreBreakdown(BaseModel):
-    """E1层：打分明细"""
-    base_score: float = 100                      # 基础分
-    c_layer_deduction: float = 0                 # C层扣分
-    bplus_layer_deduction: float = 0             # B+层扣分
-    final_score: float                           # 最终得分
+    """E1层：打分明细（新公式版）"""
+    base_score: float = 100                  # 基础分
+    anomaly_details: list[AnomalyScoreDetail] = []  # 每个异常的评分明细
+    total_deduction: float = 0               # 总扣分
+    final_score: float = 0                   # 最终得分
 
 
 class OverallAssessment(BaseModel):

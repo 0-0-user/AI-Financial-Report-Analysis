@@ -7,11 +7,10 @@
 每一层的输出自动存入 PipelineContext，供下一层读取。
 
 如果某一步失败或抛出异常，流水线会立即终止并返回错误报告。
-支持跳过指定步骤（调试时很有用）。
+不允许跳过任何步骤——严格执行，失败即终止。
 
 使用方式：
     orch = Orchestrator()
-    orch.skip("layer_c", "layer_d")  # 调试时跳过某些步骤
     report = orch.run("年报.pdf")
 """
 
@@ -27,7 +26,7 @@ from schemas.report import Report, OverallAssessment, ScoreBreakdown, PeerCompar
 
 
 class Orchestrator:
-    """流水线引擎，调度各层执行"""
+    """流水线引擎，调度各层执行（不允许跳过，失败即终止）"""
 
     def __init__(self):
         self._step_order = [
@@ -40,13 +39,6 @@ class Orchestrator:
             "layer_d",
             "layer_e",
         ]
-        self._skip_steps: set[str] = set()
-
-    def skip(self, *step_names: str) -> "Orchestrator":
-        """跳过指定步骤（调试用）"""
-        for name in step_names:
-            self._skip_steps.add(name)
-        return self
 
     def run(self, pdf_path: str) -> Report:
         """执行完整流水线"""
@@ -54,9 +46,6 @@ class Orchestrator:
         ctx._pdf_path = pdf_path
 
         for step_name in self._step_order:
-            if step_name in self._skip_steps:
-                continue
-
             # 前置依赖检查：缺字段则直接终止
             missing = registry.check_requirements(step_name, ctx)
             if missing:
@@ -69,7 +58,8 @@ class Orchestrator:
                 step_func = registry.get(step_name)
                 step_func(ctx)
             except KeyError:
-                ctx.warnings.append(f"步骤 '{step_name}' 未注册，跳过")
+                ctx.errors.append(f"步骤 '{step_name}' 未注册，终止流水线")
+                break
             except Exception as e:
                 ctx.errors.append(f"步骤 '{step_name}' 失败: {e}")
                 break

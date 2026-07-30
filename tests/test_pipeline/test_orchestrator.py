@@ -26,9 +26,8 @@ class TestOrchestrator:
         for step in expected:
             assert step in steps, f"步骤 {step} 未注册"
 
-    def test_skip_steps(self):
-        """跳过步骤功能"""
+    def test_no_skip_method(self):
+        """跳过功能已被移除——严格按顺序执行"""
         orch = Orchestrator()
-        orch.skip("layer_c", "layer_d")
-        # 验证 skip 不会报错
-        assert True
+        assert not hasattr(orch, "skip"), "skip() 方法已被移除"
+        assert not hasattr(orch, "_skip_steps"), "_skip_steps 已被移除"

@@ -22,7 +22,6 @@ from layers.layer_d_reasoning.d2_probability import (
     _calc_source_authority,
     _calc_source_count_bonus,
     _calc_consensus_weight,
-    _default_merged,
     _extract_indicator,
     run_probability_allocation,
 )
@@ -321,31 +320,6 @@ class TestBuildConflictMap:
 
 
 # ============================================================
-# _default_merged — 降级不合并
-# ============================================================
-
-class TestDefaultMerged:
-    def test_basic(self):
-        lookups = [
-            Explanation(summary="原因X", source_text="text", page_number=1),
-            Explanation(summary="原因Y", source_text="text", page_number=2),
-        ]
-        hypotheses = [
-            Hypothesis(hypothesis="假设M", reasoning="推理", source="券商"),
-        ]
-        merged = _default_merged(lookups, hypotheses)
-        assert len(merged) == 3
-        # 每个都有独立的名字，没有冲突
-        for item in merged:
-            assert not item["conflicts_with"]
-        # 前两个是路1，第三个是路2
-        assert merged[0]["path1_indices"] == [0]
-        assert merged[0]["path2_indices"] == []
-        assert merged[2]["path1_indices"] == []
-        assert merged[2]["path2_indices"] == [0]
-
-
-# ============================================================
 # _extract_indicator
 # ============================================================
 
@@ -374,10 +348,15 @@ class TestRunProbabilityAllocation:
         result = run_probability_allocation([])
         assert result == []
 
-    def test_single_anomaly_no_llm_merge(self):
-        """单个异常，LLM 失败时走降级不合并路径
-        验证输出结构完整：probabilities sum=1.0，含 ds_metadata
-        """
+    def test_single_anomaly_with_mocked_merge(self, monkeypatch):
+        """单个异常，mock LLM 合并 → 验证输出结构完整"""
+        def mock_merge(indicator, lookups, hypotheses):
+            return [{"name": "存货增加", "path1_indices": [0], "path2_indices": [0], "conflicts_with": []}]
+        monkeypatch.setattr(
+            "layers.layer_d_reasoning.d2_probability._llm_merge_conflict",
+            mock_merge,
+        )
+
         lookups = [
             Explanation(summary="存货增加", source_text="主要是加大备货力度所致", page_number=15),
         ]
@@ -401,22 +380,21 @@ class TestRunProbabilityAllocation:
         pa = assignments[0]
         assert pa.anomaly_indicator == "存货周转率"
         assert pa.anomaly_source == "C"
-        # probabilities 和为 1.0（pignistic 转后的）
         assert abs(sum(pa.probabilities.values()) - 1.0) < 1e-6
-        # 含 ds_metadata
         assert pa.ds_metadata is not None
         assert "m1" in pa.ds_metadata
         assert "m2" in pa.ds_metadata
         assert "conflict_K" in pa.ds_metadata
-        assert "severe_conflict" in pa.ds_metadata
-        # 此时的 merge_failed 为 True（因为 LLM 调用失败，走降级）
-        # 降级后路径1+路径2各自独立，每个路1归因和路2归因都与自己冲突
-        # 两个归因不冲突（降级无冲突结构）
-        if pa.ds_metadata.get("merge_failed", False):
-            assert pa.ds_metadata.get("merge_failed") is True
 
-    def test_ds_metadata_contains_k(self):
+    def test_ds_metadata_contains_k(self, monkeypatch):
         """验证 ds_metadata 包含冲突系数"""
+        def mock_merge(indicator, lookups, hypotheses):
+            return [{"name": "存货增加", "path1_indices": [0], "path2_indices": [0], "conflicts_with": []}]
+        monkeypatch.setattr(
+            "layers.layer_d_reasoning.d2_probability._llm_merge_conflict",
+            mock_merge,
+        )
+
         lookups = [
             Explanation(summary="存货增加", source_text="加大备货", page_number=15),
         ]
@@ -435,7 +413,5 @@ class TestRunProbabilityAllocation:
         assignments = run_probability_allocation(results)
         pa = assignments[0]
         meta = pa.ds_metadata
-        # LLM 不可用，走降级：不合并，无冲突
-        # K 应该为 0（因为降级路径无冲突）
         assert isinstance(meta.get("conflict_K"), (int, float))
         assert isinstance(meta.get("severe_conflict"), bool)

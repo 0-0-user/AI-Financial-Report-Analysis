@@ -71,11 +71,17 @@ def _print_report(report: dict):
     breakdown = report.get("score_breakdown")
     if breakdown:
         print(f"    基础分: {breakdown.get('base_score', 100)}")
-        c_ded = breakdown.get("c_layer_deduction", 0)
-        b_ded = breakdown.get("bplus_layer_deduction", 0)
-        if c_ded or b_ded:
-            print(f"    C层扣分: -{c_ded:.2f}")
-            print(f"    B+层扣分: -{b_ded:.2f}")
+        total_ded = breakdown.get("total_deduction", 0)
+        details = breakdown.get("anomaly_details", [])
+        print(f"    总扣分: {total_ded:.2f} ({len(details)}个异常)")
+        if details:
+            for d in details[:5]:  # 最多显示5个
+                src = d.get("source", "")
+                ind = d.get("indicator", "")
+                k = d.get("k_value", 0)
+                wp = d.get("w_phe", 0)
+                as_ = d.get("anomaly_score", 0)
+                print(f"      [{src}] {ind}: K={k:.2f}, W={wp:.2f}, score={as_:.2f}")
 
     # 核心异常
     anomalies = report.get("core_anomalies", [])

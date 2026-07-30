@@ -199,13 +199,12 @@ def _llm_merge_conflict(
         )
         raw = response if isinstance(response, str) else str(response)
         merged = _parse_merge_result(raw)
-        if merged:
-            return merged
+        if not merged:
+            raise RuntimeError(f"D2 LLM 语义合并失败: 返回空结果, raw={raw[:200]}")
+        return merged
     except Exception as e:
-        logger.warning(f"LLM 语义合并失败，使用默认不合并方案: {e}")
-
-    # 降级：不合并，各自独立，无冲突
-    return _default_merged(lookups, hypotheses)
+        logger.error(f"D2 语义合并失败，终止管道: {e}")
+        raise
 
 
 def _parse_merge_result(raw: str) -> list[dict] | None:
@@ -244,29 +243,6 @@ def _parse_merge_result(raw: str) -> list[dict] | None:
         })
 
     return valid if valid else None
-
-
-def _default_merged(lookups: list, hypotheses: list) -> list[dict]:
-    """降级：不合并，每项独立，无冲突"""
-    merged = []
-    for i in range(len(lookups)):
-        summary = getattr(lookups[i], "summary", f"路1解释{i}")
-        merged.append({
-            "name": f"路1-{summary[:30]}",
-            "path1_indices": [i],
-            "path2_indices": [],
-            "conflicts_with": [],
-        })
-    for j in range(len(hypotheses)):
-        hyp_text = getattr(hypotheses[j], "hypothesis", f"路2假设{j}")
-        merged.append({
-            "name": f"路2-{hyp_text[:30]}",
-            "path1_indices": [],
-            "path2_indices": [j],
-            "conflicts_with": [],
-        })
-    return merged
-
 
 # ════════════════════════════════════════════
 # Step 1: 构建 m₁（路1 mass）

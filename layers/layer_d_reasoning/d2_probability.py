@@ -512,22 +512,16 @@ def _is_explicit_conflict(
 def _pignistic_transform(mass_final: dict[str, float]) -> dict[str, float]:
     """将合成后的 mass 转为概率分布
 
-    公式: prob(A) = m_total(A) / (1 - m_total(Θ))
-
-    将 Θ 的质量按比例分摊到各归因，保证 Σ = 1.0。
+    v5.2 决策: 未知质量(Θ)不摊回已知归因，而是单独分配给"其他原因"桶，
+    避免把不确定性伪装成确定性归因。已知归因取各自 mass，Σ = 1.0。
+    例: {归因A:0.44, 归因B:0.30, Θ:0.26} → 归因A 44%、归因B 30%、其他 26%。
     """
-    uncertainty = mass_final.get("Θ", 0.0)
-    norm = 1.0 - uncertainty
-
-    if norm <= 0:
-        # 全部是不确定性，无可用归因
-        return {"其他原因": 1.0}
-
-    probs = {}
+    probs: dict[str, float] = {}
     for name, mass in mass_final.items():
         if name == "Θ":
-            continue
-        probs[name] = round(mass / norm, 4)
+            probs["其他原因"] = round(mass, 4)
+        else:
+            probs[name] = round(mass, 4)
 
     # 修正最后一位浮点误差
     total = sum(probs.values())

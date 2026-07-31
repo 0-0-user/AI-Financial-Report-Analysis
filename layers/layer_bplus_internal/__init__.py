@@ -17,6 +17,7 @@ Step 3: 内控质量评估 (朱亚萍2015)
 
 from pipeline.step_registry import registry
 from pipeline.context import PipelineContext
+from pipeline.tracer import tracer
 from .logic_checks import run_all_checks, run_internal_control_check, calc_risk_level
 
 
@@ -48,6 +49,7 @@ def run(ctx: PipelineContext) -> None:
         all_anomalies.extend(run_extended_checks(ctx.financials))
     except ImportError:
         pass
+    tracer.milestone("B+", "三步+扩展检查", "success", f"{len(all_anomalies)} 项异常")
 
     # Step 3: 内控检查 (从年报元数据推断) 
     # 默认值: 大型企业通常有独立审计和职责分离，小型较难保证
@@ -70,6 +72,10 @@ def run(ctx: PipelineContext) -> None:
 
     # 风险汇总
     risk = calc_risk_level(data_anomalies, behavior_anomalies, ic_missing)
+    tracer.milestone(
+        "B+", "风险等级", "success",
+        f"{risk['risk_level']} (评分 {risk['total_score']}/6) — {risk['recommendation']}",
+    )
 
     ctx.logic_anomalies = all_anomalies
     ctx.warnings.append(

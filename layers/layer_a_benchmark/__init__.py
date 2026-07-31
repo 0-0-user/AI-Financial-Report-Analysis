@@ -2,6 +2,7 @@
 
 from pipeline.step_registry import registry
 from pipeline.context import PipelineContext
+from pipeline.tracer import tracer
 
 
 @registry.register("layer_a", requires=["raw_doc"])
@@ -15,3 +16,7 @@ def run(ctx: PipelineContext) -> None:
     ctx.benchmark = benchmark
     ctx.multi_year_financials = multi_year
     ctx.multi_year_company_names = company_names
+
+    peers = benchmark.peer_companies if benchmark else []
+    top_names = ", ".join(p.name for p in peers[:5])
+    tracer.milestone("A2", "同行匹配", "success", f"同行 {len(peers)} 家, Top5: {top_names}")

@@ -56,8 +56,12 @@ def run_macro_search(ctx: PipelineContext) -> list[str]:
         logger.warning("A0: 未生成任何搜索词")
         return []
 
-    # 步骤2: 执行搜索 + 提取事实 (无 SerpAPI Key 时 LLM 知识兜底) 
+    from pipeline.tracer import tracer
+    tracer.milestone("A0", "生成搜索词", "success", f"{len(search_queries)} 条: " + "；".join(search_queries[:6]))
+
+    # 步骤2: 执行搜索 + 提取事实 (无 SerpAPI Key 时 LLM 知识兜底)
     all_search_results = _execute_searches(search_queries)
+    tracer.milestone("A0", "联网搜索", "success", all_search_results[:200])
 
     # 步骤3: LLM 提取事实
     facts = _extract_facts(
@@ -66,6 +70,7 @@ def run_macro_search(ctx: PipelineContext) -> list[str]:
         year=year,
         search_results=all_search_results,
     )
+    tracer.milestone("A0", "提取宏观事实", "success", f"{len(facts)} 条: " + "；".join(facts[:3]))
 
     logger.info(f"A0: 提取到 {len(facts)} 条宏观事实")
     return facts

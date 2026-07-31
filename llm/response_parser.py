@@ -28,6 +28,28 @@ class ResponseParser:
     """LLM 响应解析器，处理常见格式问题"""
 
     @staticmethod
+    def split_thinking(raw: str) -> tuple[str | None, str]:
+        """从 LLM 输出中分离"思考过程"与"最终结果"
+
+        约定（见 config/prompts/ 各模板的"思考过程"指令）：
+        输出以"思考过程:"开头，"最终结果:"之后才是正式结果。
+        找不到标记则返回 (None, raw)——向后兼容未加思考指令的调用。
+
+        Returns:
+            (thinking, result)：思考过程文本（无则 None），正式结果
+        """
+        if not raw:
+            return None, raw
+        m = re.search(
+            r"(?:思考过程|思考)\s*[:：]\s*(.*?)\s*(?:最终结果|最终输出)\s*[:：]",
+            raw,
+            re.DOTALL,
+        )
+        if m:
+            return m.group(1).strip(), raw[m.end():].strip()
+        return None, raw
+
+    @staticmethod
     def parse_json(raw: str) -> dict:
         """解析 LLM 返回的 JSON 字符串
 

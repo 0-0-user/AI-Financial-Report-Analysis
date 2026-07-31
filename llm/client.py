@@ -44,6 +44,7 @@ from pydantic import BaseModel
 
 from llm.prompt_loader import PromptLoader
 from llm.response_parser import ResponseParser
+from pipeline.tracer import tracer
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,8 @@ PROVIDER_CONFIG: dict[str, dict] = {
         "adapter": "openai",
         "env_key": "DEEPSEEK_API_KEY",
         "base_url": "https://api.deepseek.com",
-        "default_model": "deepseek-chat",
+        "default_model": "deepseek-v4-flash",
+        "max_output_tokens": 16384,
     },
     "qwen": {
         "adapter": "openai",
@@ -107,7 +109,8 @@ PROVIDER_CONFIG: dict[str, dict] = {
         "adapter": "openai",
         "env_key": "GLM_API_KEY",
         "base_url": "https://open.bigmodel.cn/api/paas/v4/",
-        "default_model": "glm-4-plus",
+        "default_model": "glm-4.7-flash",
+        "max_output_tokens": 16384,
     },
     "moonshot": {
         "adapter": "openai",
@@ -129,6 +132,36 @@ PROVIDER_CONFIG: dict[str, dict] = {
     },
 }
 
+# 机械映射类任务：原生思考链价值低且大幅拖慢/不稳定（实测 B0 字段映射可卡数小时），
+# 对这些 prompt 单独关闭 thinking；推理类任务（L0分类/D1/D2/D3/E2）保留原生思考链。
+NO_THINKING_PROMPTS: set[str] = {"b0_semantic_guide"}
+
+# prompt 名 → 层归属（用于日志归类）
+PROMPT_TO_LAYER: dict[str, str] = {
+    "b0_table_localization": "L0",
+    "a0_search_query": "A0",
+    "a0_macro_facts": "A0",
+    "b0_semantic_guide": "B0",
+    "d1_lookup_notes": "D1路1",
+    "d1_hypothesis": "D1路2",
+    "d2_merge_conflict": "D2",
+    "d3_semantic_match": "D3",
+    "e2_explanation": "E2",
+    "e2_summary": "E2",
+}
+
+
+def _messages_to_text(messages: list[dict]) -> str:
+    """把渲染后的消息列表拼成可读文本（供日志输入摘要）"""
+    parts = []
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(str(c) for c in content if isinstance(c, (str, dict)))
+        parts.append(f"[{role}] {content}")
+    return "\n".join(parts)
+
 
 class LLMClient:
     """统一的 LLM 客户端，屏蔽多厂商差异"""
@@ -138,7 +171,7 @@ class LLMClient:
         provider: str = "",
         model: Optional[str] = None,
         max_retries: int = 3,
-        timeout_seconds: int = 120,
+        timeout_seconds: int = 300,
     ):
         """
         Args:
@@ -158,7 +191,13 @@ class LLMClient:
 
         self.provider = provider
         self.config = config
-        self.model = model or config["default_model"]
+        # 模型：界面可在 LLM_MODEL_{PROVIDER} 环境变量指定（如 LLM_MODEL_DEEPSEEK），否则用厂商默认。
+        # 用"LLM_MODEL_"前缀避免与系统其他 {PROVIDER}_MODEL 环境变量冲突。
+        self.model = (
+            model
+            or os.getenv(f"LLM_MODEL_{provider.upper()}")
+            or config["default_model"]
+        )
         self.max_retries = max_retries
         self.timeout_seconds = timeout_seconds
 
@@ -252,22 +291,71 @@ class LLMClient:
         # 步骤1: 加载并渲染 prompt
         prompt_data = self._prompt_loader.load(prompt_name)
         messages = self._prompt_loader.render(prompt_name, variables)
-        # 从 prompt 配置中读 temperature/max_tokens (调用层传参优先) 
+        # 从 prompt 配置中读 temperature/max_tokens (调用层传参优先)
         if temperature is None:
             temperature = prompt_data.get("temperature")
         if max_tokens is None:
             max_tokens = prompt_data.get("max_tokens")
 
-        # 步骤2: 调用 API (带重试) 
-        raw_response = self._call_with_retry(messages, temperature=temperature, max_tokens=max_tokens)
+        # max_tokens 上限保护: 不超过模型输出上限，避免 API 报错
+        max_output = self.config.get("max_output_tokens")
+        if max_output and (max_tokens is None or max_tokens > max_output):
+            max_tokens = max_output
 
-        # 步骤3: 解析输出
+        # 步骤2: 调用 API (带重试)，自动记录到流水账
+        layer = PROMPT_TO_LAYER.get(prompt_name, "")
+        self._active_prompt = prompt_name  # 供 _call_openai 决定是否关闭原生思考
+        tracer.llm_start(prompt_name, layer, self.model, _messages_to_text(messages))
+        start = time.time()
+
+        # 调用 + 空输出重试: 原生思考链可能占用全部 max_tokens 导致 content 为空，
+        # 这是模型行为不稳定而非请求失败——重试至多 3 次，仍空则终止（不做降级）。
+        raw_result = None
+        empty_retries = 0
+        while True:
+            try:
+                raw_result = self._call_with_retry(
+                    messages, temperature=temperature, max_tokens=max_tokens,
+                )
+            except Exception as e:
+                tracer.llm_fail(error=str(e), duration_ms=(time.time() - start) * 1000)
+                raise
+
+            content = raw_result.get("content") or ""
+            if content.strip():
+                break
+            empty_retries += 1
+            if empty_retries >= 3:
+                raise RuntimeError("LLM 连续 3 次输出为空（原生思考链占用全部输出预算）")
+            logger.warning(f"LLM 输出为空（第 {empty_retries} 次），重试...")
+            tracer.llm_fail(error="输出为空", duration_ms=(time.time() - start) * 1000)
+
+        # 步骤3: 剥离"思考过程"，拿到纯结果（模型原生思考链已在流式中记录）
+        explicit_thinking, result_text = ResponseParser.split_thinking(content)
+        if explicit_thinking is None:
+            result_text = content  # 模型未按格式输出，原样当结果
+
+        # 步骤4: 解析输出 + 记账
+        duration_ms = (time.time() - start) * 1000
         if response_schema is not None:
-            return self._parse_structured(raw_response, response_schema)
+            parsed = self._parse_structured(result_text, response_schema)
+            tracer.llm_done(
+                parsed_preview=str(parsed)[:800],
+                duration_ms=duration_ms,
+                tokens_input=raw_result.get("tokens_input", 0),
+                tokens_output=raw_result.get("tokens_output", 0),
+            )
+            return parsed
 
-        return raw_response
+        tracer.llm_done(
+            parsed_preview=result_text[:800],
+            duration_ms=duration_ms,
+            tokens_input=raw_result.get("tokens_input", 0),
+            tokens_output=raw_result.get("tokens_output", 0),
+        )
+        return result_text
 
-    def _call_with_retry(self, messages: list[dict], **api_kwargs) -> str:
+    def _call_with_retry(self, messages: list[dict], **api_kwargs) -> dict:
         """带重试机制的 API 调用
 
         重试策略:
@@ -303,7 +391,7 @@ class LLMClient:
 
         raise RuntimeError(f"LLM API 调用最终失败: {last_error}")
 
-    def _call_api_once(self, messages: list[dict], **api_kwargs) -> str:
+    def _call_api_once(self, messages: list[dict], **api_kwargs) -> dict:
         """单次 API 调用 (无重试) """
         if self._client is None:
             raise RuntimeError(f"LLM 客户端未初始化 ({self.provider} SDK 可能未安装) ")
@@ -320,12 +408,11 @@ class LLMClient:
     # 各厂商具体的 API 调用
     # ──────────────────────────────────────────────
 
-    def _call_anthropic(self, messages: list[dict]) -> str:
-        """调用 Anthropic Messages API
+    def _call_anthropic(self, messages: list[dict], **api_kwargs) -> dict:
+        """调用 Anthropic Messages API (流式)
 
-        Anthropic 的消息格式要求:
-        - system 消息要单独提取出来作为 system 参数
-        - 其余消息作为 messages 列表
+        Returns:
+            dict: {content, thinking, tokens_input, tokens_output}
         """
         system_content = None
         api_messages = []
@@ -339,26 +426,52 @@ class LLMClient:
         kwargs = {
             "model": self.model,
             "messages": api_messages,
-            "max_tokens": 4096,
+            "max_tokens": api_kwargs.get("max_tokens") or 4096,
         }
+        if api_kwargs.get("temperature") is not None:
+            kwargs["temperature"] = api_kwargs["temperature"]
         if system_content:
             kwargs["system"] = system_content
 
-        response = self._client.messages.create(**kwargs)
+        content_parts: list[str] = []
+        thinking_parts: list[str] = []
+        tokens_input = 0
+        tokens_output = 0
 
-        # 提取返回文本
-        content_blocks = response.content
-        if content_blocks and hasattr(content_blocks[0], "text"):
-            return content_blocks[0].text
-        return str(content_blocks)
+        with self._client.messages.stream(**kwargs) as stream:
+            for text in stream.text_stream:
+                content_parts.append(text)
+                tracer.stream_token("content", text)
+            final = stream.get_final_message()
+            usage = getattr(final, "usage", None)
+            if usage is not None:
+                tokens_input = getattr(usage, "input_tokens", 0) or 0
+                tokens_output = getattr(usage, "output_tokens", 0) or 0
 
-    def _call_openai(self, messages: list[dict], **api_kwargs) -> str:
-        """调用 OpenAI 兼容 Chat Completion API (GPT / DeepSeek / Qwen / GLM ...) """
+        return {
+            "content": "".join(content_parts),
+            "thinking": "".join(thinking_parts),
+            "tokens_input": tokens_input,
+            "tokens_output": tokens_output,
+        }
+
+    def _call_openai(self, messages: list[dict], **api_kwargs) -> dict:
+        """调用 OpenAI 兼容 Chat Completion API (流式，GPT / DeepSeek / Qwen / GLM ...)
+
+        Returns:
+            dict: {content, thinking, tokens_input, tokens_output}
+        """
         call_kwargs: dict = {
             "model": self.model,
             "messages": messages,
+            "stream": True,
         }
-        # 传递 temperature / max_tokens (None 则不传，让 API 用默认值) 
+        # 原生思考链(reasoning_content)：底层推理由 _call_openai 流式捕获到 tracer。
+        # 机械映射类任务（如 B0）对 OpenAI 兼容厂商关闭原生思考，避免拖慢/不稳定；推理任务保留。
+        # 原生思考可能占用 max_tokens 导致 content 为空，由 chat() 的空输出重试兜底。
+        if self.config["adapter"] == "openai" and getattr(self, "_active_prompt", "") in NO_THINKING_PROMPTS:
+            call_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        # 传递 temperature / max_tokens (None 则不传，让 API 用默认值)
         if api_kwargs.get("temperature") is not None:
             call_kwargs["temperature"] = api_kwargs["temperature"]
         if api_kwargs.get("max_tokens") is not None:
@@ -368,7 +481,46 @@ class LLMClient:
 
         response = self._client.chat.completions.create(**call_kwargs)
 
-        return response.choices[0].message.content or ""
+        content_parts: list[str] = []
+        thinking_parts: list[str] = []
+        usage = None
+        for chunk in response:
+            # 部分厂商会在末 chunk 携带 usage（流式默认不保证）
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
+                usage = chunk_usage
+                continue
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            if delta is None:
+                continue
+            # 原生思考链 (DeepSeek-R1 / 智谱 thinking 系列)
+            rc = getattr(delta, "reasoning_content", None)
+            if rc:
+                thinking_parts.append(rc)
+                tracer.stream_token("thinking", rc)
+            if delta.content:
+                content_parts.append(delta.content)
+                tracer.stream_token("content", delta.content)
+
+        content = "".join(content_parts)
+
+        # token 统计: 优先取 API usage，否则粗略估算
+        if usage is not None:
+            tokens_input = getattr(usage, "prompt_tokens", 0) or 0
+            tokens_output = getattr(usage, "completion_tokens", 0) or 0
+        else:
+            tokens_input = self.count_tokens(_messages_to_text(messages))
+            tokens_output = self.count_tokens(content)
+
+        return {
+            "content": content,
+            "thinking": "".join(thinking_parts),
+            "tokens_input": tokens_input,
+            "tokens_output": tokens_output,
+        }
 
     # ──────────────────────────────────────────────
     # 结构化输出解析

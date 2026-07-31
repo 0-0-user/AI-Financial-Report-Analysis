@@ -131,6 +131,11 @@ def run_tagging(raw_doc: RawDocument) -> CompanyTags:
     csv_hard_tags = _csv_lookup_hard_tags(stock_code, company_name)
     if csv_hard_tags:
         logger.info(f"CSV 查到硬标签: {', '.join(f'{t.system}={t.value}' for t in csv_hard_tags)}")
+        from pipeline.tracer import tracer
+        tracer.milestone(
+            "A1", "硬标签定位", "success",
+            f"匹配成功: 三级={csv_hard_tags[0].value}, 二级={csv_hard_tags[1].value}, 一级={csv_hard_tags[2].value}",
+        )
         return CompanyTags(
             company_name=company_name,
             stock_code=stock_code,
@@ -140,6 +145,8 @@ def run_tagging(raw_doc: RawDocument) -> CompanyTags:
 
     # CSV 查不到，直接返回空标签
     logger.warning(f"CSV 未查到 {company_name}({stock_code})，该企业不在同花顺行业分类库中")
+    from pipeline.tracer import tracer
+    tracer.milestone("A1", "硬标签定位", "success", f"CSV 未查到 {company_name}({stock_code})，返回空标签（无兜底）")
     return CompanyTags(
         company_name=company_name,
         stock_code=stock_code,

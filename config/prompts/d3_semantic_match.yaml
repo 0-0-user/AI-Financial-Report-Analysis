@@ -28,7 +28,7 @@ messages:
       规则：
       1. 只从给定的语义库中选取关键词，不发明新关键词
       2. 如果原因描述匹配多个等级的关键词，取 score_base 最低的（最严重的）
-      3. 只输出 JSON 格式：{ "matched_level": int, "matched_keywords": [str] }
+      3. 最终结果只输出 JSON 格式：{ "matched_level": int, "matched_keywords": [str] }
       4. 每个原因最多匹配 3 个关键词
       5. 不要自行解读或扩展原因描述的含义
 

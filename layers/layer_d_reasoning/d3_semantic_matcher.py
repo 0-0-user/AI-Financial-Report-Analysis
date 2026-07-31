@@ -81,6 +81,10 @@ def _match_single_cause(
     Returns:
         (matched_level, matched_keywords)
     """
+    # 系统生成的"其他原因"桶（D2 未知质量）：语义分为 0 中性，不调用 LLM
+    if cause == "其他原因":
+        return 0, ["其他原因"]
+
     from llm.client import LLMClient
 
     client = LLMClient()

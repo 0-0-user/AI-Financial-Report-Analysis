@@ -13,6 +13,9 @@ dependencies = [
     "openai>=1.0",
     "httpx>=0.25",
     "akshare>=1.18",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

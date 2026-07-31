@@ -1,0 +1,16 @@
+# ==========================================================
+# config/prompts/test_connection.yaml — 连通性测试最小 prompt
+# ==========================================================
+#
+# 用途：Web 界面"换钥匙"板块测各厂商 API 连通性。
+# 只用一句话让模型回复 OK，验证 key 和 base_url 是否可用。
+#
+# 被谁使用：web/app.py 的 /api/test-connection
+
+name: test_connection
+description: "最小连通性测试：让模型回复 OK"
+
+messages:
+  - role: user
+    content: |
+      请只回复两个字母：OK

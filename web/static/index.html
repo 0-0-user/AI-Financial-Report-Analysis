@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 财报分析</title>
+<style>
+  :root {
+    --bg1: #f0f4ff;
+    --bg2: #e8eeff;
+    --card: #ffffff;
+    --ink: #1e293b;
+    --muted: #64748b;
+    --accent: #6366f1;
+    --accent2: #8b5cf6;
+    --ok: #10b981;
+    --err: #ef4444;
+    --radius: 18px;
+    --shadow: 0 8px 30px rgba(99, 102, 241, .12);
+    --shadow-hover: 0 14px 40px rgba(99, 102, 241, .22);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    min-height: 100vh;
+    color: var(--ink);
+    background: linear-gradient(135deg, var(--bg1), var(--bg2), #fdf0ff);
+    padding: 24px;
+  }
+  .app { max-width: 1100px; margin: 0 auto; }
+
+  /* 顶栏 */
+  .topbar { text-align: center; margin-bottom: 22px; }
+  .topbar h1 {
+    font-size: 26px; font-weight: 700;
+    background: linear-gradient(120deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .topbar p { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  /* Tab 切换 */
+  .tabs {
+    display: inline-flex; gap: 6px; padding: 6px; border-radius: 999px;
+    background: rgba(255,255,255,.7); box-shadow: var(--shadow);
+    margin-bottom: 22px;
+  }
+  .tab {
+    border: none; cursor: pointer; padding: 10px 26px; border-radius: 999px;
+    font-size: 15px; font-weight: 600; color: var(--muted);
+    background: transparent; transition: all .3s cubic-bezier(.4,0,.2,1);
+  }
+  .tab.active {
+    background: linear-gradient(120deg, var(--accent), var(--accent2));
+    color: #fff; box-shadow: 0 4px 14px rgba(99,102,241,.4);
+  }
+  .tab:not(.active):hover { color: var(--accent); transform: translateY(-1px); }
+
+  /* 面板过渡 */
+  .panel { display: none; animation: fadeSlide .45s cubic-bezier(.4,0,.2,1); }
+  .panel.active { display: block; }
+  @keyframes fadeSlide {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* 板块一：厂商卡片 */
+  .section-title { font-size: 15px; color: var(--muted); margin: 8px 0 14px; }
+  .step-block { margin-bottom: 30px; }
+  .step-title {
+    font-size: 16px; font-weight: 700; color: var(--ink);
+    margin: 6px 0 8px; display: flex; align-items: center; gap: 8px;
+  }
+  .step-title::before {
+    content: ""; width: 6px; height: 18px; border-radius: 999px;
+    background: linear-gradient(180deg, var(--accent), var(--accent2)); display: inline-block;
+  }
+  .mineru-card {
+    background: var(--card); border-radius: var(--radius); padding: 18px;
+    box-shadow: var(--shadow); max-width: 420px; transition: transform .3s, box-shadow .3s;
+  }
+  .mineru-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-hover); }
+  .provider-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+  }
+  .provider-card {
+    background: var(--card); border-radius: var(--radius); padding: 18px;
+    box-shadow: var(--shadow); transition: transform .3s, box-shadow .3s;
+    border: 2px solid transparent;
+  }
+  .provider-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-hover); }
+  .provider-card.is-default { border-color: var(--accent); }
+  .card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .logo { font-size: 30px; }
+  .card-head h3 { font-size: 16px; }
+  .model { font-size: 12px; color: var(--muted); }
+  .badge {
+    margin-left: auto; font-size: 11px; padding: 3px 10px; border-radius: 999px;
+    background: rgba(99,102,241,.12); color: var(--accent); font-weight: 600;
+  }
+  .url { font-size: 12px; color: var(--muted); margin-bottom: 12px; word-break: break-all; }
+  .model-row { margin-bottom: 12px; }
+  .model-select {
+    width: 100%; padding: 9px 12px; border-radius: 12px; border: 1.5px solid #e2e8f0;
+    font-size: 13px; outline: none; background: #fafbff; transition: border-color .3s; cursor: pointer;
+  }
+  .model-select:focus { border-color: var(--accent); }
+  .key-row { display: flex; gap: 6px; margin-bottom: 12px; }
+  .key-row input {
+    flex: 1; padding: 10px 12px; border-radius: 12px; border: 1.5px solid #e2e8f0;
+    font-size: 13px; outline: none; transition: border-color .3s;
+  }
+  .key-row input:focus { border-color: var(--accent); }
+  .eye { border: none; background: #f1f5f9; border-radius: 12px; cursor: pointer; width: 40px; }
+  .actions { display: flex; gap: 8px; }
+  .btn {
+    flex: 1; border: none; cursor: pointer; padding: 9px 0; border-radius: 12px;
+    font-size: 13px; font-weight: 600; transition: all .25s;
+    background: #f1f5f9; color: var(--ink);
+  }
+  .btn:hover { transform: translateY(-2px); filter: brightness(1.05); }
+  .btn.test { background: linear-gradient(120deg, var(--accent), var(--accent2)); color: #fff; }
+  .btn.save { background: #eef2ff; color: var(--accent); }
+  .btn.default { background: #ecfdf5; color: var(--ok); }
+  .status { margin-top: 10px; font-size: 13px; min-height: 18px; }
+  .status.ok { color: var(--ok); }
+  .status.err { color: var(--err); }
+
+  /* 板块二：分析 */
+  .dropzone {
+    border: 2px dashed rgba(99,102,241,.5); border-radius: var(--radius);
+    padding: 46px 20px; text-align: center; cursor: pointer;
+    transition: all .3s; background: rgba(255,255,255,.5);
+  }
+  .dropzone:hover, .dropzone.dragover { border-color: var(--accent); background: rgba(99,102,241,.06); transform: scale(1.01); }
+  .dz-inner { font-size: 16px; color: var(--muted); }
+  .dz-inner .big { font-size: 44px; display: block; margin-bottom: 10px; }
+  .fileinfo { margin-top: 10px; font-size: 13px; color: var(--accent); font-weight: 600; }
+  .start-row { display: flex; gap: 12px; margin: 18px 0; align-items: center; }
+  .btn-start {
+    padding: 13px 40px; border-radius: 999px; border: none; cursor: pointer;
+    font-size: 16px; font-weight: 700; color: #fff;
+    background: linear-gradient(120deg, var(--accent), var(--accent2));
+    box-shadow: 0 6px 20px rgba(99,102,241,.4); transition: all .3s;
+  }
+  .btn-start:hover { transform: translateY(-3px); box-shadow: 0 10px 28px rgba(99,102,241,.5); }
+  .btn-start:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+  .btn-cancel {
+    padding: 12px 24px; border-radius: 999px; border: 1.5px solid #fecaca;
+    background: #fff; color: var(--err); font-size: 14px; cursor: pointer; transition: all .3s;
+  }
+  .btn-cancel:hover { background: #fef2f2; }
+  .btn-pause {
+    padding: 12px 24px; border-radius: 999px; border: 1.5px solid #bfdbfe;
+    background: #fff; color: #2563eb; font-size: 14px; cursor: pointer; transition: all .3s;
+  }
+  .btn-pause:hover { background: #eff6ff; }
+  .progress-track {
+    height: 8px; border-radius: 999px; background: #e2e8f0; overflow: hidden; margin-bottom: 18px;
+  }
+  .progress-bar { height: 100%; width: 0; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .5s ease; }
+
+  /* 实时 log */
+  .log {
+    background: #0f172a; border-radius: var(--radius); padding: 18px;
+    max-height: 480px; overflow-y: auto; font-size: 13.5px; line-height: 1.7;
+    font-family: "Consolas", "PingFang SC", monospace;
+  }
+  .log .entry { color: #cbd5e1; padding: 3px 0; animation: fadeIn .3s; }
+  .log .entry.ms-ok { color: #34d399; }
+  .log .entry.ms-err { color: #f87171; }
+  .log .entry.ms-start { color: #93c5fd; }
+  .log .entry.think { color: #a78bfa; }
+  .log .entry.out { color: #e2e8f0; white-space: pre-wrap; word-break: break-all; }
+  .log .entry .tag { font-weight: 700; margin-right: 6px; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  /* 分析板块两栏：核心里程碑小窗 + 实时过程 */
+  .analyze-layout { display: flex; gap: 16px; align-items: flex-start; }
+  .milestone-panel {
+    width: 250px; flex-shrink: 0; background: var(--card);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px;
+    position: sticky; top: 20px;
+  }
+  .log-panel { flex: 1; min-width: 0; }
+  .mini-title { font-size: 13px; font-weight: 700; color: var(--muted); margin-bottom: 10px; }
+  .ms-row {
+    display: flex; align-items: center; gap: 8px; padding: 7px 9px;
+    border-radius: 12px; font-size: 13px; margin-bottom: 6px;
+    border: 1px solid #eef1f7; background: #fafbff;
+    transition: all .3s;
+  }
+  .ms-row .ms-ico { width: 22px; text-align: center; font-size: 14px; }
+  .ms-row .ms-name { font-weight: 600; color: var(--ink); }
+  .ms-row .ms-state { margin-left: auto; font-size: 11px; }
+  .ms-row.pending { opacity: .6; }
+  .ms-row.running { border-color: #bfdbfe; background: #eff6ff; }
+  .ms-row.running .ms-state { color: #3b82f6; }
+  .ms-row.done { border-color: #a7f3d0; background: #ecfdf5; }
+  .ms-row.done .ms-state { color: var(--ok); }
+  .ms-row.failed { border-color: #fecaca; background: #fef2f2; }
+  .ms-row.failed .ms-state { color: var(--err); }
+  @media (max-width: 860px) { .analyze-layout { flex-direction: column; } .milestone-panel { width: 100%; position: static; } }
+  .log::-webkit-scrollbar { width: 8px; }
+  .log::-webkit-scrollbar-thumb { background: #334155; border-radius: 999px; }
+
+  /* 实时 Markdown 展示区 */
+  .md-view {
+    background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 20px; max-height: 480px; overflow-y: auto; line-height: 1.8;
+    font-size: 14px;
+  }
+  .md-view h1 { font-size: 20px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 10px; }
+  .md-view h2 { font-size: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; margin: 18px 0 10px; }
+  .md-view h3 { font-size: 14.5px; margin: 14px 0 8px; }
+  .md-view table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13px; }
+  .md-view th, .md-view td { border: 1px solid #e2e8f0; padding: 6px 10px; }
+  .md-view code { background: #f1f5f9; padding: 2px 6px; border-radius: 6px; font-size: 13px; }
+  .md-view pre { background: #f8fafc; border-radius: 12px; padding: 12px; overflow-x: auto; white-space: pre-wrap; }
+  .md-view blockquote { border-left: 4px solid var(--accent); padding-left: 12px; color: var(--muted); }
+  .md-view::-webkit-scrollbar { width: 8px; }
+  .md-view::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+
+  /* 报告 */
+  .report { margin-top: 20px; background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 26px; }
+  .mini-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .mini-tab { border: none; background: #f1f5f9; padding: 8px 18px; border-radius: 999px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); transition: all .3s; }
+  .mini-tab.active { background: linear-gradient(120deg, var(--accent), var(--accent2)); color: #fff; }
+  #mdContent { line-height: 1.8; overflow-wrap: break-word; }
+  #mdContent h1, #mdContent h2 { border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin: 18px 0 12px; }
+  #mdContent table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  #mdContent th, #mdContent td { border: 1px solid #e2e8f0; padding: 8px 12px; }
+  #mdContent img { max-width: 100%; border-radius: 12px; }
+  #mdContent blockquote { border-left: 4px solid var(--accent); padding-left: 12px; color: var(--muted); }
+
+  .loading-dots::after {
+    content: ""; display: inline-block; width: 14px; text-align: left;
+    animation: dots 1.4s infinite steps(4);
+  }
+  @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <h1>📈 AI 财报分析</h1>
+    <p>配置各家大模型 · 拖入年报 PDF 智能分析</p>
+  </div>
+  <div style="text-align:center">
+    <div class="tabs">
+      <button class="tab active" data-tab="config">🔑 换钥匙</button>
+      <button class="tab" data-tab="analyze">📊 跑分析</button>
+    </div>
+  </div>
+
+  <!-- 板块一：换钥匙 -->
+  <div id="config" class="panel active">
+    <div class="step-block">
+      <div class="step-title">第一步 · 配置大模型（AI 厂商）</div>
+      <div class="section-title">填 key → 测连通 → 设为主力（分析时自动用它）</div>
+      <div class="provider-grid" id="llmGrid"></div>
+    </div>
+    <div class="step-block">
+      <div class="step-title">第二步 · 配置 MinerU（PDF 解析）</div>
+      <div class="section-title">MinerU 把年报 PDF 解析成文字和表格</div>
+      <div id="mineruCard"></div>
+    </div>
+  </div>
+
+  <!-- 板块二：跑分析 -->
+  <div id="analyze" class="panel">
+    <div class="dropzone" id="dropzone">
+      <div class="dz-inner"><span class="big">📄</span>把年报 PDF 拖进来，或点这里选择文件</div>
+      <input type="file" id="fileInput" accept=".pdf" hidden>
+    </div>
+    <div class="fileinfo" id="fileInfo"></div>
+    <div class="start-row">
+      <button class="btn-start" id="btnStart" disabled>🚀 开始分析</button>
+      <button class="btn-pause" id="btnPause" style="display:none">⏸ 暂停</button>
+      <button class="btn-cancel" id="btnCancel" style="display:none">✋ 取消</button>
+    </div>
+    <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+    <div class="analyze-layout">
+      <div class="milestone-panel">
+        <div class="mini-title">🗺️ 核心里程碑</div>
+        <div id="milestoneList"></div>
+      </div>
+      <div class="log-panel">
+        <div class="mini-title">📜 实时过程（Markdown）</div>
+        <div class="md-view" id="liveMd"><p style="color:#94a3b8">等待上传 PDF…</p></div>
+      </div>
+    </div>
+    <div class="report" id="report" style="display:none">
+      <div class="mini-tabs">
+        <button class="mini-tab active" data-show="report">📄 报告</button>
+        <button class="mini-tab" data-show="trace">📓 流水账</button>
+      </div>
+      <div id="mdContent"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ═══════════ 通用 ═══════════
+const $ = s => document.querySelector(s);
+let currentTaskId = null;
+let es = null;
+
+// Tab 切换
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+  t.classList.add("active");
+  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+  $("#" + t.dataset.tab).classList.add("active");
+}));
+
+// ═══════════ 板块一：厂商卡片 ═══════════
+const PROVIDER_EMOJI = { deepseek: "🐋", glm: "🧠", qwen: "✨", openai: "🤖", anthropic: "🍃", moonshot: "🌙", gemini: "💎", doubao: "🫘", mineru: "📄" };
+const PROVIDER_NAME = { deepseek: "DeepSeek", glm: "智谱 GLM", qwen: "通义千问", openai: "OpenAI", anthropic: "Anthropic", moonshot: "Kimi", gemini: "Gemini", doubao: "豆包", mineru: "MinerU 文档解析" };
+
+async function loadProviders() {
+  const res = await fetch("/api/providers");
+  const data = await res.json();
+  const grid = $("#llmGrid");
+  grid.innerHTML = "";
+  (data.llm || []).forEach(p => {
+    const card = document.createElement("div");
+    card.className = "provider-card" + (p.is_default ? " is-default" : "");
+    card.dataset.provider = p.provider;
+    const emoji = PROVIDER_EMOJI[p.provider] || "🤖";
+    const name = PROVIDER_NAME[p.provider] || p.provider;
+    const isMineru = !!p.is_mineru;
+    const modelHtml = isMineru ? "" : `
+      <div class="model-row">
+        <select class="model-select">
+          ${p.models.map(m => `<option value="${esc(m)}" ${m === p.current_model ? "selected" : ""}>${esc(m)}</option>`).join("")}
+          <option value="__custom__">自定义模型…</option>
+        </select>
+      </div>`;
+    const defaultBtn = isMineru ? "" : '<button class="btn default">设为主力</button>';
+    card.innerHTML = `
+      <div class="card-head">
+        <span class="logo">${emoji}</span>
+        <div><h3>${esc(name)}</h3><span class="model">${isMineru ? "文档解析" : esc(p.default_model)}</span></div>
+        ${p.is_default ? '<span class="badge">⭐ 主力</span>' : ''}
+      </div>
+      <div class="url">${esc(p.base_url || "官方 API")}</div>
+      ${modelHtml}
+      <div class="key-row">
+        <input type="password" class="key-input" placeholder="${p.has_key ? "已配置（可覆盖）" : "输入 API key"}" autocomplete="off">
+        <button class="eye" title="显示/隐藏">👁</button>
+      </div>
+      <div class="actions">
+        <button class="btn test">测试连通</button>
+        <button class="btn save">保存</button>
+        ${defaultBtn}
+      </div>
+      <div class="status"></div>
+    `;
+    // 眼睛切换
+    card.querySelector(".eye").addEventListener("click", e => {
+      const inp = card.querySelector(".key-input");
+      inp.type = inp.type === "password" ? "text" : "password";
+    });
+    // 测试
+    card.querySelector(".btn.test").addEventListener("click", async () => {
+      const key = card.querySelector(".key-input").value;
+      const status = card.querySelector(".status");
+      status.className = "status"; status.textContent = "⏳ 测试中…";
+      const res = await fetch("/api/test-connection", { method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ provider: p.provider, api_key: key }) });
+      const r = await res.json();
+      status.className = "status " + (r.ok ? "ok" : "err");
+      status.textContent = r.ok ? "✅ " + r.message : "❌ " + r.message;
+    });
+    // 保存
+    card.querySelector(".btn.save").addEventListener("click", async () => {
+      const key = card.querySelector(".key-input").value;
+      const status = card.querySelector(".status");
+      const body = { provider: p.provider };
+      if (key.trim()) body.api_key = key;
+      const sel = card.querySelector(".model-select");
+      if (sel && sel.value && sel.value !== "__custom__") body.model = sel.value;
+      if (sel && sel.value === "__custom__") {
+        const custom = prompt("输入自定义模型名", p.current_model || p.default_model || "");
+        if (custom && custom.trim()) body.model = custom.trim();
+      }
+      const res = await fetch("/api/config", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+      const r = await res.json();
+      if (res.ok) { status.className = "status ok"; status.textContent = "✅ " + (r.message || "已保存"); loadProviders(); }
+      else { status.className = "status err"; status.textContent = "❌ " + (r.detail || "保存失败"); }
+    });
+    // 设为主力
+    if (card.querySelector(".btn.default")) {
+      card.querySelector(".btn.default").addEventListener("click", async () => {
+        const key = card.querySelector(".key-input").value;
+        const status = card.querySelector(".status");
+        const body = { provider: p.provider, set_default: true };
+        if (key.trim()) body.api_key = key;
+        const sel = card.querySelector(".model-select");
+        if (sel && sel.value && sel.value !== "__custom__") body.model = sel.value;
+        const res = await fetch("/api/config", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+        const r = await res.json();
+        if (res.ok) { status.className = "status ok"; status.textContent = "✅ " + (r.message || "已设为主力"); loadProviders(); }
+        else { status.className = "status err"; status.textContent = "❌ " + (r.detail || "设置失败"); }
+      });
+    }
+    grid.appendChild(card);
+  });
+  // MinerU 独立配置（第二步）
+  renderMineru(data.mineru);
+}
+
+function renderMineru(m) {
+  const box = $("#mineruCard");
+  if (!box) return;
+  box.innerHTML = `
+    <div class="mineru-card">
+      <div class="card-head">
+        <span class="logo">📄</span>
+        <div><h3>MinerU 文档解析</h3><span class="model">mineru.net · PDF 版面解析</span></div>
+      </div>
+      <div class="url">https://mineru.net</div>
+      <div class="key-row">
+        <input type="password" class="key-input" placeholder="${m.has_key ? "已配置（可覆盖）" : "输入 MinerU API key"}" autocomplete="off">
+        <button class="eye" title="显示/隐藏">👁</button>
+      </div>
+      <div class="actions">
+        <button class="btn test">测试连通</button>
+        <button class="btn save">保存</button>
+      </div>
+      <div class="status"></div>
+    </div>
+  `;
+  box.querySelector(".eye").addEventListener("click", () => {
+    const inp = box.querySelector(".key-input");
+    inp.type = inp.type === "password" ? "text" : "password";
+  });
+  box.querySelector(".btn.test").addEventListener("click", async () => {
+    const key = box.querySelector(".key-input").value;
+    const st = box.querySelector(".status");
+    st.className = "status"; st.textContent = "⏳ 测试中…";
+    const res = await fetch("/api/test-connection", { method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ provider: "mineru", api_key: key }) });
+    const r = await res.json();
+    st.className = "status " + (r.ok ? "ok" : "err");
+    st.textContent = r.ok ? "✅ " + r.message : "❌ " + r.message;
+  });
+  box.querySelector(".btn.save").addEventListener("click", async () => {
+    const key = box.querySelector(".key-input").value;
+    const st = box.querySelector(".status");
+    const body = { provider: "mineru" };
+    if (key.trim()) body.api_key = key;
+    const res = await fetch("/api/config", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    const r = await res.json();
+    if (res.ok) { st.className = "status ok"; st.textContent = "✅ " + (r.message || "已保存"); renderMineru({ ...m, has_key: true }); }
+    else { st.className = "status err"; st.textContent = "❌ " + (r.detail || "保存失败"); }
+  });
+}
+
+// ═══════════ 板块二：分析 ═══════════
+const dropzone = $("#dropzone");
+const fileInput = $("#fileInput");
+let selectedFile = null;
+
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("dragover"); });
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+dropzone.addEventListener("drop", e => {
+  e.preventDefault(); dropzone.classList.remove("dragover");
+  if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", () => { if (fileInput.files.length) setFile(fileInput.files[0]); });
+
+function setFile(file) {
+  if (!file.name.toLowerCase().endsWith(".pdf")) { alert("请选择 PDF 文件"); return; }
+  selectedFile = file;
+  $("#fileInfo").textContent = "📄 " + file.name + "（" + (file.size/1024/1024).toFixed(1) + " MB）";
+  $("#btnStart").disabled = false;
+}
+
+// 进度条映射
+const progressMap = { layer_0: 12, layer_a: 24, layer_b: 36, layer_amacro: 48, layer_bplus: 60, layer_c: 68, layer_d: 88, layer_e: 100 };
+
+// 核心里程碑小窗（分析板块左栏，8 个阶段状态图）
+const MS_STAGES = [
+  { name: "① 拆 PDF", layers: ["L0"] },
+  { name: "② 打标签 · 找同行", layers: ["A1", "A2", "A1/A2"] },
+  { name: "③ 认表头 · 取数校验", layers: ["B0", "B1", "B0/B1"] },
+  { name: "④ 宏观情报", layers: ["A0"] },
+  { name: "⑤ 查造假", layers: ["B+"] },
+  { name: "⑥ 算偏差", layers: ["C"] },
+  { name: "⑦ 找原因", layers: ["D1", "D2", "D3", "D1/D2/D3"] },
+  { name: "⑧ 打分 · 报告", layers: ["E1", "E2", "E1/E2"] },
+];
+const msRows = {};
+function initMilestones() {
+  const list = $("#milestoneList");
+  if (!list) return;
+  list.innerHTML = "";
+  MS_STAGES.forEach((st, i) => {
+    const row = document.createElement("div");
+    row.className = "ms-row pending";
+    row.innerHTML = `<span class="ms-ico">⚪</span><span class="ms-name">${st.name}</span><span class="ms-state">待开始</span>`;
+    list.appendChild(row);
+    msRows[i] = row;
+  });
+}
+function updateMilestone(layer, status) {
+  MS_STAGES.forEach((st, i) => {
+    if (!st.layers.includes(layer)) return;
+    const row = msRows[i];
+    if (!row) return;
+    if (status === "success") { row.className = "ms-row done"; row.querySelector(".ms-ico").textContent = "✅"; row.querySelector(".ms-state").textContent = "完成"; }
+    else if (status === "failed") { row.className = "ms-row failed"; row.querySelector(".ms-ico").textContent = "❌"; row.querySelector(".ms-state").textContent = "失败"; }
+    else { row.className = "ms-row running"; row.querySelector(".ms-ico").textContent = "🔄"; row.querySelector(".ms-state").textContent = "进行中"; }
+  });
+}
+
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = String(s == null ? "" : s);
+  return d.innerHTML;
+}
+
+// 极简 Markdown 渲染器（无外部依赖，支持标题/表格/图片/粗体/列表/引用）
+function renderMd(text) {
+  text = String(text || "");
+  text = text.replace(/\[\^fn_\d+\]:.*$/gm, "");            // 移除脚注定义
+  text = text.replace(/\[\^fn_\d+\]/g, "");                 // 移除脚注引用
+  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="/$2" alt="$1" loading="lazy">');
+  text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  // 表格
+  text = text.replace(/((?:\|.+\|\n)+)/g, block => {
+    const lines = block.trim().split("\n").map(l => l.replace(/^\||\|$/g, "").split("|").map(c => c.trim()));
+    const header = lines.shift() || [];
+    if (lines[0] && lines[0].every(c => /^:?-+:?$/.test(c))) lines.shift();
+    return "<table><thead><tr>" + header.map(c => "<th>" + c + "</th>").join("") + "</tr></thead><tbody>"
+      + lines.map(r => "<tr>" + r.map(c => "<td>" + c + "</td>").join("") + "</tr>").join("") + "</tbody></table>";
+  });
+  text = text.replace(/^### (.*)$/gm, "<h3>$1</h3>");
+  text = text.replace(/^## (.*)$/gm, "<h2>$1</h2>");
+  text = text.replace(/^# (.*)$/gm, "<h1>$1</h1>");
+  text = text.replace(/^&gt; (.+)$/gm, "<blockquote>$1</blockquote>");
+  text = text.replace(/^- (.+)$/gm, "<li>$1</li>");
+  text = text.replace(/\n{2,}/g, "</p><p>");
+  text = text.replace(/\n/g, "<br>");
+  return "<p>" + text + "</p>";
+}
+
+function showLive(msg) {
+  const live = $("#liveMd");
+  if (live) live.innerHTML = "<p>" + esc(msg) + "</p>";
+}
+
+$("#btnStart").addEventListener("click", async () => {
+  if (!selectedFile) return;
+  $("#btnStart").disabled = true;
+  $("#btnCancel").style.display = "inline-block";
+  const bp0 = $("#btnPause");
+  bp0.dataset.paused = "0";
+  bp0.textContent = "⏸ 暂停";
+  bp0.style.display = "inline-block";
+  initMilestones();
+  $("#progressBar").style.width = "0%";
+  showLive("🚀 开始分析…");
+
+  const fd = new FormData();
+  fd.append("file", selectedFile);
+  const res = await fetch("/api/analyze", { method: "POST", body: fd });
+  if (!res.ok) { const e = await res.json(); showLive("❌ " + (e.detail || "上传失败")); $("#btnStart").disabled = false; return; }
+  const data = await res.json();
+  currentTaskId = data.task_id;
+  $("#progressBar").style.width = "0%";
+
+  // SSE：里程碑更新小窗 + Markdown 实时渲染
+  es = new EventSource(`/api/analyze/${currentTaskId}/events`);
+  es.onmessage = e => {
+    let d;
+    try { d = JSON.parse(e.data); } catch(_) { return; }
+    if (d.type === "milestone") {
+      updateMilestone(d.layer, d.status);
+      if (progressMap[d.layer]) $("#progressBar").style.width = progressMap[d.layer] + "%";
+    } else if (d.type === "markdown") {
+      const live = $("#liveMd");
+      live.innerHTML = renderMd(d.text);
+      live.scrollTop = live.scrollHeight;
+    } else if (d.type === "control") {
+      const bp = $("#btnPause");
+      if (d.state === "paused") { bp.dataset.paused = "1"; bp.textContent = "▶ 继续"; }
+      else if (d.state === "resumed") { bp.dataset.paused = "0"; bp.textContent = "⏸ 暂停"; }
+      else if (d.state === "cancelled") { showLive("✋ 分析已终止"); }
+    }
+  };
+  es.addEventListener("done", () => {
+    es.close();
+    $("#btnPause").style.display = "none";
+    $("#btnCancel").style.display = "none";
+    loadResult();
+  });
+  es.addEventListener("error", e => {
+    if (e.data) showLive("❌ " + e.data);
+  });
+  es.onerror = () => { /* 后端 done 前断开会重连，忽略 */ };
+});
+
+$("#btnCancel").addEventListener("click", async () => {
+  if (!currentTaskId) return;
+  await fetch(`/api/analyze/${currentTaskId}/cancel`, { method: "POST" });
+  showLive("✋ 正在终止分析…");
+  $("#btnPause").style.display = "none";
+  $("#btnCancel").style.display = "none";
+});
+
+$("#btnPause").addEventListener("click", async () => {
+  if (!currentTaskId) return;
+  const btn = $("#btnPause");
+  const paused = btn.dataset.paused === "1";
+  if (paused) {
+    await fetch(`/api/analyze/${currentTaskId}/resume`, { method: "POST" });
+    btn.dataset.paused = "0";
+    btn.textContent = "⏸ 暂停";
+    showLive("▶ 已继续分析…");
+  } else {
+    await fetch(`/api/analyze/${currentTaskId}/pause`, { method: "POST" });
+    btn.dataset.paused = "1";
+    btn.textContent = "▶ 继续";
+    showLive("⏸ 已暂停分析，点「继续」接上");
+  }
+});
+
+async function loadResult() {
+  const res = await fetch(`/api/analyze/${currentTaskId}/result`);
+  const data = await res.json();
+  if (data.status === "cancelled") { showLive("✋ 分析已终止"); $("#btnStart").disabled = false; return; }
+  if (data.status === "error") { showLive("❌ 分析失败：" + (data.message || "")); $("#btnStart").disabled = false; return; }
+  $("#btnStart").disabled = false;
+  $("#progressBar").style.width = "100%";
+  const report = $("#report");
+  report.style.display = "block";
+  const md = data.markdown || "# 无报告内容";
+  $("#mdContent").dataset.markdown = md;
+  $("#mdContent").innerHTML = renderMd(md);
+  window._traceMd = data.trace_md || "";
+}
+
+// 报告 / 流水账切换
+document.querySelectorAll(".mini-tab").forEach(t => t.addEventListener("click", () => {
+  document.querySelectorAll(".mini-tab").forEach(x => x.classList.remove("active"));
+  t.classList.add("active");
+  const show = t.dataset.show;
+  if (show === "report") $("#mdContent").innerHTML = renderMd($("#mdContent").dataset.markdown || "# 报告");
+  else $("#mdContent").innerHTML = renderMd(window._traceMd || "# 无流水账");
+}));
+
+// 初始加载
+loadProviders();
+initMilestones();
+</script>
+</body>
+</html>

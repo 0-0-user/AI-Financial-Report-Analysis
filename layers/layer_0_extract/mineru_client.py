@@ -21,6 +21,21 @@ logger = logging.getLogger(__name__)
 DEFAULT_CLI_PATH = r"C:\Users\xu\.mineru\bin\mineru-open-api.exe"
 
 
+def _load_env() -> None:
+    """从项目根目录 .env 加载环境变量（幂等）"""
+    project_root = Path(__file__).resolve().parent.parent.parent
+    env_path = project_root / ".env"
+    if env_path.exists():
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(env_path, override=True)
+        except ImportError:
+            pass
+
+
+_load_env()
+
+
 class MineruClient:
     """MinerU API 封装 — 调用 CLI 提取 PDF 内容"""
 
@@ -57,6 +72,15 @@ class MineruClient:
 
         out_dir = Path(output_dir or tempfile.mkdtemp())
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        # 缓存命中: 该分块 PDF 已解析过，直接复用输出（同一 PDF 的确定性结果）
+        cache_json = out_dir / f"{pdf_path.stem}.json"
+        if cache_json.exists():
+            with open(cache_json, encoding="utf-8") as f:
+                cached = json.load(f)
+            cached_list = cached if isinstance(cached, list) else cached.get("content_list", [])
+            logger.info(f"MinerU 命中缓存: {cache_json.name} ({len(cached_list)} 元素)")
+            return cached
 
         # 构建命令
         cmd = [

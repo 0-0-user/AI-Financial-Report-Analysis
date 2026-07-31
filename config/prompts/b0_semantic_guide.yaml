@@ -49,6 +49,13 @@ messages:
       - 资产负债表：Total_Assets / Total_Liabilities / Equity_Total / Monetary_Funds / Inventory / Accounts_Receivable
       - 现金流量表：Cash_Flow_Op / Cash_Flow_Inv / Cash_Flow_Fin / Net_Cash_Increase
       - 通用：Revenue_Total
+
+      【必须包含的关键字段（在原始字段列表中若存在则必须映射，不可省略）】
+      - 资产负债表：资产总计(Total_Assets)、负债合计(Total_Liabilities)、所有者权益(或股东权益)合计(Equity_Total)、货币资金(Monetary_Funds)、存货(Inventory)
+      - 利润表：营业收入(Revenue_Total)、净利润(Net_Profit)
+      - 现金流量表：经营活动产生的现金流量净额(Cash_Flow_Op)、投资活动产生的现金流量净额(Cash_Flow_Inv)、筹资活动产生的现金流量净额(Cash_Flow_Fin)
+      其余字段也尽量完整映射。
+
       如果字段不在清单中，用中文名拼音或见名知义的英文描述。
 
   - role: user

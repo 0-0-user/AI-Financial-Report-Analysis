@@ -35,10 +35,17 @@ class RawTableRow(BaseModel):
 
 
 class FinancialTable(BaseModel):
-    """财务数据部分: 三大报表的原始OCR数据"""
-    balance_sheet: list[RawTableRow]             # 资产负债表
-    income_statement: list[RawTableRow]          # 利润表
-    cashflow_statement: list[RawTableRow]        # 现金流量表
+    """财务数据部分: 三大报表的原始OCR数据
+
+    合并报表进 balance_sheet/income_statement/cashflow_statement（B0/B1 主用，供 B/C/D/E 分析）；
+    母公司报表单独存 parent_* 桶（供 B+ 层母子资金分离度检查），两者彻底分离不混行。
+    """
+    balance_sheet: list[RawTableRow]             # 合并资产负债表
+    income_statement: list[RawTableRow]          # 合并利润表
+    cashflow_statement: list[RawTableRow]        # 合并现金流量表
+    parent_balance_sheet: list[RawTableRow] = []       # 母公司资产负债表
+    parent_income_statement: list[RawTableRow] = []    # 母公司利润表
+    parent_cashflow_statement: list[RawTableRow] = []  # 母公司现金流量表
 
 
 class DiscussionSection(BaseModel):

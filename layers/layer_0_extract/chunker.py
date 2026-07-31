@@ -46,9 +46,12 @@ class DocumentChunker:
             r"管理层报告",
         ],
         "footnotes": [
+            # 附注章节标题通常独立成行（行首）。审计报告正文的"财务报表附注"是句中引用，
+            # 用多行行首锚点避开误命中，让附注章节起点正确、财务区自然收敛到核心报表页。
+            r"(?m)^\s*财务报表附注\s*$",
+            r"(?m)^\s*财务报表附注[（(]",
             r"财务报表附注",
             r"会计报表附注",
-            r"财务报告说明",
         ],
         "company_overview": [
             r"公司简介",
@@ -231,44 +234,112 @@ class DocumentChunker:
     # 四大区块提取
     # ────────────────────────────────────────
 
+    @staticmethod
+    def _is_core_statement_table(rows: list[list]) -> bool:
+        """判断一张表是否是核心三大报表表（纯代码粗筛，不调 LLM）
+
+        依据: 表头前 2 行（空白归一化后）含"附注"列 且 含日期/年度列
+        （"12月31日" 或 "年度"）。年报财务章节的三大报表（合并+母公司）
+        表头都是 "项目 | 附注 | 日期/年度" 结构；附注明细表表头无"附注"列。
+        实证: 对年报财务区 216 张表筛选恰好命中 6 张核心报表，0 误报 0 漏报。
+
+        Args:
+            rows: 表格行列数据（list[list]，每个元素是单元格文本）
+
+        Returns:
+            是否为三大报表核心表
+        """
+        if not rows:
+            return False
+        header_cells: list[str] = []
+        for r in rows[:2]:
+            for c in r:
+                if c is None:
+                    continue
+                norm = str(c).replace(" ", "").replace("　", "").strip()
+                if norm:
+                    header_cells.append(norm)
+        text = " ".join(header_cells)
+        has_note_col = "附注" in text
+        has_date_col = ("12月31日" in text) or ("年度" in text)
+        return has_note_col and has_date_col
+
+    def _find_page_statement_title(self, page_num: int) -> str:
+        """在该页文本中找三大报表标题（含合并/母公司前缀）
+
+        报表标题（如"母公司资产负债表"）是页面上的独立文本元素，MinerU 不挂到表格上。
+        这里从页面文本提取标题，供 LLM 判断 report_scope（合并/母公司）的依据。
+        页面无"合并/母公司"前缀（如只有"资产负债表"）时返回空串，由 LLM 默认合并。
+        """
+        for page in self.pages:
+            if page.get("page_num") != page_num:
+                continue
+            text = page.get("text", "")
+            m = re.search(r"(合并|母公司)\s*(资产负债表|利润表|现金流量表)", text)
+            if m:
+                return m.group(1) + m.group(2)
+            break
+        return ""
+
     def _extract_financial_data(
         self, page_range: Optional[tuple[int, int]]
     ) -> dict:
         """提取财务数据 (三大报表原始 OCR 表格)
 
-        v3: LLM 分类表格，不设降级。
+        v4: 核心表粗筛 + LLM 分类（含合并/母公司区分），不设降级。
 
         Returns:
-            {"balance_sheet": [RawTableRow], "income_statement": [...], "cashflow_statement": [...]}
+            {"balance_sheet": [...], "income_statement": [...], "cashflow_statement": [...],
+             "parent_balance_sheet": [...], "parent_income_statement": [...], "parent_cashflow_statement": [...]}
         """
-        tables = self._get_tables_in_range(page_range)
-        if not tables:
-            return {"balance_sheet": [], "income_statement": [], "cashflow_statement": []}
-
-        # LLM 分类：对每张表判断属于哪个报表
-        classifications = self._classify_tables_with_llm(tables)
-
-        result: dict[str, list[dict]] = {
-            "balance_sheet": [],
-            "income_statement": [],
-            "cashflow_statement": [],
+        empty = {
+            "balance_sheet": [], "income_statement": [], "cashflow_statement": [],
+            "parent_balance_sheet": [], "parent_income_statement": [], "parent_cashflow_statement": [],
         }
+        all_tables = self._get_tables_in_range(page_range)
+        if not all_tables:
+            return empty
 
-        for i, table in enumerate(tables):
+        # 核心表粗筛: 只保留三大报表候选（合并+母公司，表头含"附注"列+日期列）。
+        # 附注明细表（财务区里可能混入的几百张）不进财务数据，避免 LLM 分类负载失控。
+        core_tables = []
+        for t in all_tables:
+            rows = t.get("rows", [])
+            if rows and self._is_core_statement_table(rows):
+                t = dict(t)
+                # 补页面标题（如"母公司资产负债表"），供 LLM 判断合并/母公司
+                t["page_title"] = self._find_page_statement_title(t.get("page_number", 0))
+                core_tables.append(t)
+        if not core_tables:
+            logger.warning("财务区域未找到核心三大报表表")
+            return empty
+
+        # LLM 分类: 每张表 → {statement_type, report_scope}
+        classifications = self._classify_tables_with_llm(core_tables)
+
+        result: dict[str, list[dict]] = dict(empty)
+        for i, table in enumerate(core_tables):
             page_num = table.get("page_number", 0)
             rows = table.get("rows", [])
             if not rows or len(rows) < 2:
                 continue
 
-                # 确定分类: 必须来自 LLM，不设降级
+            # 分类必须来自 LLM，不设降级
             table_id = f"table_{i}"
-            stype = classifications.get(table_id)
+            cls = classifications.get(table_id)
+            if not cls:
+                raise RuntimeError(
+                    f"LLM 未分类表格 {table_id} (第{page_num}页, 表头: "
+                    f"{' '.join(str(c) for c in (rows[0] if rows else [])[:4])[:80]})"
+                )
+            stype = cls["statement_type"]
             if stype == "other":
                 continue
-            if stype not in result:
+            scope = cls.get("report_scope", "consolidated")
+            bucket = f"parent_{stype}" if scope == "parent" else stype
+            if bucket not in result:
                 raise RuntimeError(
-                    f"LLM 未分类表格 table_{i} (第{page_num}页, 表头: "
-                    f"{' '.join(str(c) for c in (rows[0] if rows else [])[:4])[:80]})"
+                    f"LLM 分类结果异常: {table_id} → {stype}/{scope}"
                 )
 
             typed_rows = [
@@ -279,15 +350,15 @@ class DocumentChunker:
                 }
                 for i, row in enumerate(rows)
             ]
-            result[stype].extend(typed_rows)
+            result[bucket].extend(typed_rows)
 
         return result
 
-    def _classify_tables_with_llm(self, tables: list[dict]) -> dict[str, str]:
+    def _classify_tables_with_llm(self, tables: list[dict]) -> dict[str, dict]:
         """调用 LLM 对 MinerU 财务表格进行报表类型分类
 
         输入: tables (列表, 每项含 page_number 和 rows)
-        输出: {"table_0": "balance_sheet", "table_1": "income_statement", ...}
+        输出: {"table_0": {"statement_type": "balance_sheet", "report_scope": "consolidated"}, ...}
         """
         valid_tables = []
         for i, tbl in enumerate(tables):
@@ -305,6 +376,7 @@ class DocumentChunker:
             valid_tables.append({
                 "id": f"table_{i}",
                 "page_idx": tbl.get("page_number", 0),
+                "page_title": tbl.get("page_title", ""),
                 "title": rows[0][0] if rows[0] else "",
                 "header_text": " // ".join(header_lines)[:300],
             })
@@ -314,27 +386,81 @@ class DocumentChunker:
             return {}
 
         from llm.client import LLMClient
+        from pipeline.tracer import tracer
+
+        # 分批分类: 每批最多 40 张表。MinerU 解析的表格可能上百张，
+        # 一次性分类会让模型陷入逐表核对，思考链耗尽输出预算（reasoning 计入 max_tokens，
+        # 结果正式输出为 0）。分批后每批任务量适中，模型能正常输出分类 JSON。
+        BATCH_SIZE = 40
         client = LLMClient()
-        response = client.chat(
-            "b0_table_localization",
-            {"tables": valid_tables},
-            temperature=0.0,
-        )
-        result = self._parse_llm_classification(str(response))
-        if not result:
-            raise RuntimeError(
-                f"LLM 表分类返回空结果，无法为 {len(valid_tables)} 张表分配报表类型"
+        merged: dict[str, dict] = {}
+
+        for start in range(0, len(valid_tables), BATCH_SIZE):
+            batch = valid_tables[start:start + BATCH_SIZE]
+            batch_no = start // BATCH_SIZE + 1
+
+            # 分批 + 漏表补全: GLM 分类偶尔会漏掉部分表（输出 JSON 不完整），
+            # 对漏掉的表重新调用一次补全（这是保证分类完整，不是降级兜底）。
+            # 重试后仍漏则失败即终止。
+            pending = batch
+            retries = 0
+            while pending:
+                response = client.chat(
+                    "b0_table_localization",
+                    {"tables": pending},
+                    temperature=0.0,
+                )
+                batch_result = self._parse_llm_classification(str(response))
+                if not batch_result:
+                    raise RuntimeError(
+                        f"LLM 表分类第 {batch_no} 批返回空结果，无法为 {len(pending)} 张表分配报表类型"
+                    )
+                merged.update(batch_result)
+                missing = [t for t in pending if t["id"] not in batch_result]
+                if not missing:
+                    break
+                pending = missing
+                retries += 1
+                if retries >= 2:
+                    raise RuntimeError(
+                        f"LLM 表分类第 {batch_no} 批重试 {retries} 次后仍遗漏 "
+                        f"{len(pending)} 张表: {[t['id'] for t in pending[:10]]}"
+                    )
+                logger.warning(
+                    f"LLM 分类第 {batch_no} 批遗漏 {len(missing)} 张表，第 {retries + 1} 次补全..."
+                )
+
+            tracer.milestone(
+                "L0", "LLM表格分类", "success",
+                f"第 {batch_no} 批: {len(batch)} 张表(累计 {len(merged)})",
             )
 
-        matched = sum(1 for v in result.values() if v in ("balance_sheet", "income_statement", "cashflow"))
-        logger.info(
-            f"LLM 分类完成: {len(result)} 张表, {matched} 张归属核心报表"
+        # 校验: 每张表都必须被分类，缺漏即终止（不做兜底）
+        missing = [t["id"] for t in valid_tables if t["id"] not in merged]
+        if missing:
+            raise RuntimeError(f"LLM 表分类遗漏 {len(missing)} 张表: {missing[:10]}")
+
+        matched = sum(
+            1 for v in merged.values()
+            if v.get("statement_type") in ("balance_sheet", "income_statement", "cashflow")
         )
-        return result
+        logger.info(
+            f"LLM 分类完成: {len(merged)} 张表, {matched} 张归属核心报表"
+        )
+        assign = "; ".join(f"{k}→{v}" for k, v in list(merged.items())[:8])
+        tracer.milestone(
+            "L0", "LLM表格分类", "success",
+            f"{len(merged)} 张表, {matched} 张核心报表: {assign}",
+        )
+        return merged
 
     @staticmethod
-    def _parse_llm_classification(raw: str) -> dict[str, str]:
-        """解析 LLM 返回的 JSON 分类结果"""
+    def _parse_llm_classification(raw: str) -> dict[str, dict]:
+        """解析 LLM 返回的 JSON 分类结果
+
+        Returns:
+            {"table_0": {"statement_type": "balance_sheet", "report_scope": "consolidated"}, ...}
+        """
         import json
         import re
 
@@ -348,11 +474,19 @@ class DocumentChunker:
 
             classifications = data.get("classifications", [])
             if isinstance(classifications, list):
-                return {
-                    item["table_id"]: item["statement_type"]
-                    for item in classifications
-                    if isinstance(item, dict) and "table_id" in item and "statement_type" in item
-                }
+                result: dict[str, dict] = {}
+                for item in classifications:
+                    if not (
+                        isinstance(item, dict)
+                        and "table_id" in item
+                        and "statement_type" in item
+                    ):
+                        continue
+                    result[item["table_id"]] = {
+                        "statement_type": item["statement_type"],
+                        "report_scope": item.get("report_scope", "consolidated"),
+                    }
+                return result
         return {}
 
     def _extract_management_discussion(

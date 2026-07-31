@@ -49,12 +49,18 @@ messages:
         * 股东权益变动表（归入 balance_sheet）
         * 无法明确归类的表格
 
+      报表范围判断依据（report_scope）：
+      - 如果表格标题或表头显示"母公司"（如"母公司资产负债表"），report_scope 为 "parent"（母公司报表）
+      - 否则 report_scope 为 "consolidated"（合并报表，默认）
+      - "other" 类型的表 report_scope 填 null 或省略
+
   - role: user
     content: |
       请对以下从年报中提取的表格进行分类。
 
       {% for table in tables %}
       [Table {{ table.id }}] (第 {{ table.page_idx }} 页)
+      {% if table.page_title %}页标题: {{ table.page_title }}{% endif %}
       {% if table.title %}标题: {{ table.title }}{% endif %}
       表头: {{ table.header_text }}
       {% endfor %}
@@ -62,8 +68,8 @@ messages:
       输出格式（仅 JSON）：
       {
         "classifications": [
-          {"table_id": "table_0", "statement_type": "balance_sheet"},
-          {"table_id": "table_1", "statement_type": "income_statement"},
+          {"table_id": "table_0", "statement_type": "balance_sheet", "report_scope": "consolidated"},
+          {"table_id": "table_1", "statement_type": "income_statement", "report_scope": "parent"},
           ...
         ]
       }

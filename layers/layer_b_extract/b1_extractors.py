@@ -23,55 +23,104 @@ logger = logging.getLogger(__name__)
 _MONEY_QUANTIZE = Decimal("0.01")
 
 
-def run_extraction(raw_doc: RawDocument, guide: B0Guide) -> FinancialStatement:
-    """根据 B0 指引定位取数，支持行式和列式表格"""
-    all_rows: dict[str, list[RawTableRow]] = {
-        "资产负债表": list(raw_doc.financial_data.balance_sheet),
-        "利润表": list(raw_doc.financial_data.income_statement),
-        "现金流量表": list(raw_doc.financial_data.cashflow_statement),
-    }
+def _pick_rows(
+    raw_doc: RawDocument, table_name: str, is_parent: bool
+) -> list[RawTableRow]:
+    """按报表名 + 合并/母公司 选择对应桶的行"""
+    fd = raw_doc.financial_data
+    if table_name == "资产负债表":
+        return list(fd.parent_balance_sheet) if is_parent else list(fd.balance_sheet)
+    if table_name == "利润表":
+        return list(fd.parent_income_statement) if is_parent else list(fd.income_statement)
+    if table_name == "现金流量表":
+        return list(fd.parent_cashflow_statement) if is_parent else list(fd.cashflow_statement)
+    return []
 
-    balance_sheet: dict[str, FinancialField] = {}
-    income_statement: dict[str, FinancialField] = {}
-    cashflow: dict[str, FinancialField] = {}
+
+def run_extraction(raw_doc: RawDocument, guide: B0Guide) -> tuple[FinancialStatement, FinancialStatement]:
+    """根据 B0 指引定位取数，支持行式和列式表格
+
+    合并报表（financials，供 B/C/D/E 分析）与母公司报表（parent_financials，
+    供 B+ 母子资金分离度）分别提取，两者彻底分离。
+
+    Returns:
+        (financials, parent_financials) — 合并报表 + 母公司报表各一份
+    """
+    financials: dict[str, dict[str, FinancialField]] = {
+        "balance_sheet": {}, "income_statement": {}, "cashflow": {},
+    }
+    parent: dict[str, dict[str, FinancialField]] = {
+        "balance_sheet": {}, "income_statement": {}, "cashflow": {},
+    }
 
     for table_guide in guide.tables:
         table_name = table_guide.table_name
-        rows = all_rows.get(table_name, [])
+        is_parent = table_guide.report_type == "母公司报表"
+        rows = _pick_rows(raw_doc, table_name, is_parent)
         if not rows:
             continue
 
+        target = parent if is_parent else financials
         layout = getattr(table_guide, "layout", "row_major")
 
         if layout == "column_major":
             _extract_column_major(
-                rows, table_guide, balance_sheet, income_statement, cashflow, table_name
+                rows, table_guide,
+                target["balance_sheet"], target["income_statement"], target["cashflow"],
+                table_name,
             )
         else:
             _extract_row_major(
-                rows, table_guide, balance_sheet, income_statement, cashflow, table_name
+                rows, table_guide,
+                target["balance_sheet"], target["income_statement"], target["cashflow"],
+                table_name,
             )
 
-    # 交叉验证 + 自动修复
-    balance_sheet = _cross_validate_and_fix(balance_sheet)
+    # 交叉验证 + 自动修复（合并为主；母公司也做恒等式自检）
+    financials["balance_sheet"] = _cross_validate_and_fix(financials["balance_sheet"])
+    parent["balance_sheet"] = _cross_validate_and_fix(parent["balance_sheet"])
 
-    # 代码级补充提取: 对 LLM 遗漏的字段，直接从原始行匹配 financial_fields.yaml
-    balance_sheet, income_statement, cashflow = _extract_all_known_fields(
-        raw_doc, guide, balance_sheet, income_statement, cashflow
+    # 代码级补充提取: 对 LLM 遗漏的字段，直接从原始行匹配 financial_fields.yaml（合并主用）
+    financials["balance_sheet"], financials["income_statement"], financials["cashflow"] = _extract_all_known_fields(
+        raw_doc, guide,
+        financials["balance_sheet"], financials["income_statement"], financials["cashflow"],
+    )
+    # 关键合计字段精确提取: 资产总计/负债合计/所有者权益合计等用"科目列精确匹配+数值列"确定性提取，
+    # 不依赖 LLM 映射质量（B0 漏映射/子串误匹配"流动负债合计"等都会导致勾稽失败）
+    financials["balance_sheet"], financials["income_statement"], financials["cashflow"] = _extract_key_totals(
+        raw_doc, guide,
+        financials["balance_sheet"], financials["income_statement"], financials["cashflow"],
+        use_parent=False,
+    )
+    parent["balance_sheet"], parent["income_statement"], parent["cashflow"] = _extract_key_totals(
+        raw_doc, guide,
+        parent["balance_sheet"], parent["income_statement"], parent["cashflow"],
+        use_parent=True,
     )
 
     company_name = raw_doc.company_overview.company_name or ""
     stock_code = raw_doc.company_overview.stock_code or ""
     report_year = raw_doc.metadata.report_year or 0
-    report_type = guide.tables[0].report_type if guide.tables else "合并报表"
 
-    return FinancialStatement(
-        company_name=company_name, stock_code=stock_code,
-        year=report_year, report_type=report_type,
-        balance_sheet=balance_sheet, income_statement=income_statement,
-        cashflow=cashflow,
-        validation=ValidationResult(is_valid=True, checks=[]),
+    def _build(
+        bs: dict, pl: dict, cf: dict, report_type: str,
+    ) -> FinancialStatement:
+        return FinancialStatement(
+            company_name=company_name, stock_code=stock_code,
+            year=report_year, report_type=report_type,
+            balance_sheet=bs, income_statement=pl, cashflow=cf,
+            validation=ValidationResult(is_valid=True, checks=[]),
+        )
+
+    main = _build(
+        financials["balance_sheet"], financials["income_statement"], financials["cashflow"],
+        "合并报表",
     )
+    parent_fs = _build(
+        parent["balance_sheet"], parent["income_statement"], parent["cashflow"],
+        "母公司报表",
+    )
+    return main, parent_fs
 
 
 # ═══════════════════════════════════════════════
@@ -95,6 +144,10 @@ def _extract_row_major(
             value = _extract_value_fallback(rows, fm)
         else:
             row, val_str = entry
+            # 优先用 B0 映射的数值列（col_index），避免取到附注列（如"七、1"含数字被误当数值）
+            target_col = f"col_{fm.col_index}"
+            if target_col in row.columns and row.columns.get(target_col, "").strip():
+                val_str = row.columns.get(target_col, "")
             value = _parse_number(val_str) if val_str else None
 
         if value is None:
@@ -118,6 +171,15 @@ def _extract_row_major(
         _assign_field(field, table_name, bs, pl, cf)
 
 
+def _is_sub_item_row(row_text: str) -> bool:
+    """判断是否合并报表内部的细分行（"归属于母公司…""少数股东…"）
+
+    合计字段（如"所有者权益合计""净利润"）会被子串匹配到这些细分行而取错值，
+    取数时必须跳过。
+    """
+    return ("归属于母公司" in row_text) or ("归属于母" in row_text) or ("少数股东" in row_text)
+
+
 def _build_row_index(
     rows: list[RawTableRow], field_mappings: list[FieldMapping],
 ) -> dict[str, tuple[RawTableRow, str | None]]:
@@ -125,12 +187,15 @@ def _build_row_index(
 
     对每行提取科目名 (col_0 或 col_0+col_1) ，查 field_mappings 中
     的 raw_name 是否在行文本中 -> 匹配则记录该行和最新数值列。
+    跳过"归属于母公司/少数股东"细分行，避免合计字段子串误匹配。
     """
     idx: dict[str, tuple[RawTableRow, str | None]] = {}
     known_names = {fm.raw_name for fm in field_mappings}
     for row in rows:
         cols = row.columns
         row_text = " ".join(str(v) for v in cols.values())
+        if _is_sub_item_row(row_text):
+            continue
         for name in known_names:
             if name in row_text:
                 val_str = _find_numeric_column(cols)
@@ -198,8 +263,16 @@ def _assign_field(field: FinancialField, table_name: str, bs: dict, pl: dict, cf
         cf[field.standard_name] = field
 
 
+def _is_note_ref(text) -> bool:
+    """判断是否为附注引用（如"七、1""五、10"），不是数值列"""
+    t = str(text).strip()
+    return bool(re.match(r'^[一二三四五六七八九十]+[、.，,]\s*\d+$', t))
+
+
 def _find_numeric_column(columns: dict[str, str]) -> Optional[str]:
     for val in columns.values():
+        if _is_note_ref(val):
+            continue
         cleaned = str(val).replace(",", "").replace(" ", "").replace("%", "")
         if cleaned and any(c.isdigit() for c in cleaned):
             return str(val)
@@ -296,11 +369,15 @@ def _extract_all_known_fields(raw_doc, guide, bs, pl, cf):
             continue
         for source_type, row in all_rows:
             row_text = " ".join(str(v) for v in row.columns.values())
+            if _is_sub_item_row(row_text):
+                continue
             matched = any(v in row_text for v in field_info["variants"])
             if not matched:
                 continue
             val_str = None
             for val in row.columns.values():
+                if _is_note_ref(val):
+                    continue
                 cleaned = str(val).replace(",", "").replace(" ", "").replace("%", "")
                 if cleaned and any(c.isdigit() for c in cleaned):
                     val_str = str(val)
@@ -326,6 +403,73 @@ def _extract_all_known_fields(raw_doc, guide, bs, pl, cf):
     if added:
         import logging
         logging.getLogger(__name__).info(f"代码级补充提取: 新增 {added} 个字段")
+    return bs, pl, cf
+
+
+# ═══════════════════════════════════════════════
+# 关键合计字段精确提取 (确定性，不依赖 LLM)
+# ═══════════════════════════════════════════════
+
+# (标准字段名, 源表, 科目列精确候选)
+_KEY_TOTALS: list[tuple[str, str, list[str]]] = [
+    ("Total_Assets", "balance_sheet", ["资产总计", "资产总额"]),
+    ("Total_Liabilities", "balance_sheet", ["负债合计"]),
+    ("Equity_Total", "balance_sheet", ["所有者权益(或股东权益)合计", "所有者权益合计"]),
+    ("Monetary_Funds", "balance_sheet", ["货币资金"]),
+    ("Inventory", "balance_sheet", ["存货"]),
+    ("Revenue_Total", "income_statement", ["营业收入", "营业总收入"]),
+    ("Net_Profit", "income_statement", ["净利润"]),
+    ("Cash_Flow_Op", "cashflow", ["经营活动产生的现金流量净额", "经营活动现金流量净额"]),
+]
+
+
+def _extract_key_totals(raw_doc, guide, bs, pl, cf, use_parent: bool = False):
+    """对关键合计字段做精确科目名提取，缺失时补上
+
+    用"科目列(col_0)精确等于候选名 + 取数值列(col_2=本期)"，
+    避免 B0 漏映射或子串匹配误命中"流动负债合计"等细分行。
+    use_parent=True 时对母公司报表桶提取（供 B+ 母子资金分离度）。
+    """
+    from decimal import Decimal, ROUND_HALF_UP
+    fd = raw_doc.financial_data
+    rows_map = {
+        "balance_sheet": list(fd.parent_balance_sheet if use_parent else fd.balance_sheet),
+        "income_statement": list(fd.parent_income_statement if use_parent else fd.income_statement),
+        "cashflow": list(fd.parent_cashflow_statement if use_parent else fd.cashflow_statement),
+    }
+    target_map = {"balance_sheet": bs, "income_statement": pl, "cashflow": cf}
+    money_quantize = Decimal("0.01")
+    overall_unit = guide.tables[0].overall_unit if guide.tables else "元"
+    report_type = "母公司报表" if use_parent else (guide.tables[0].report_type if guide.tables else "合并报表")
+    added = 0
+
+    for std_name, source, variants in _KEY_TOTALS:
+        # 总是用精确提取覆盖: B0 可能把"负债合计"子串误匹配到"流动负债合计"行导致值错，
+        # 科目列精确匹配(candidates)是确定性的，优先于 LLM 映射。
+        for row in rows_map[source]:
+            col0 = str(row.columns.get("col_0", "")).strip()
+            if col0 not in variants:
+                continue
+            # 取数值列: 优先 col_2（本期/期末），否则找第一个非附注数值列
+            val_str = None
+            for key in ("col_2", "col_3", "col_1"):
+                v = row.columns.get(key, "")
+                if v and not _is_note_ref(v):
+                    val_str = v
+                    break
+            if not val_str:
+                val_str = _find_numeric_column(row.columns)
+            value = _parse_number(val_str) if val_str else None
+            if value is not None:
+                target_map[source][std_name] = FinancialField(
+                    standard_name=std_name, raw_name=variants[0],
+                    value=float(Decimal(str(value)).quantize(money_quantize, rounding=ROUND_HALF_UP)),
+                    original_unit=overall_unit, report_type=report_type,
+                )
+                added += 1
+            break
+    if added:
+        logger.info(f"关键合计字段精确提取: 新增 {added} 个")
     return bs, pl, cf
 
 

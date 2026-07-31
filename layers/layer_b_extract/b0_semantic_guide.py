@@ -59,19 +59,29 @@ _ROW_MAJOR_THRESHOLD = 3   # 列数>=3 -> 行式 (科目在行) | MinerU 财报�
 _COL_MAJOR_THRESHOLD = 3   # 列数<=3 且 行数>=10 -> 列式 (科目在列) 
 
 def run_semantic_guide(raw_doc: RawDocument) -> B0Guide:
-    """LLM 只读表头 -> 输出字段映射指引"""
+    """LLM 只读表头 -> 输出字段映射指引
+
+    合并报表（financials 主用）与母公司报表（供 B+ 母子资金分离度）分别引导，
+    report_type 由 L0 归桶信息决定（母公司桶强制标"母公司报表"），不依赖表头重新检测。
+    """
+    fd = raw_doc.financial_data
     tables: list[TableGuide] = []
-    sheet_map = {
-        "资产负债表": raw_doc.financial_data.balance_sheet,
-        "利润表": raw_doc.financial_data.income_statement,
-        "现金流量表": raw_doc.financial_data.cashflow_statement,
-    }
-    for table_name, rows in sheet_map.items():
-        if not rows:
-            continue
-        guide = _process_one_table(table_name, rows)
-        if guide:
-            tables.append(guide)
+    sheet_map = [
+        ("资产负债表", fd.balance_sheet, fd.parent_balance_sheet),
+        ("利润表", fd.income_statement, fd.parent_income_statement),
+        ("现金流量表", fd.cashflow_statement, fd.parent_cashflow_statement),
+    ]
+    for table_name, consolidated_rows, parent_rows in sheet_map:
+        if consolidated_rows:
+            guide = _process_one_table(table_name, consolidated_rows)
+            if guide:
+                guide.report_type = "合并报表"
+                tables.append(guide)
+        if parent_rows:
+            guide = _process_one_table(table_name, parent_rows)
+            if guide:
+                guide.report_type = "母公司报表"
+                tables.append(guide)
     return B0Guide(tables=tables, raw_document_name=raw_doc.metadata.file_name)
 
 

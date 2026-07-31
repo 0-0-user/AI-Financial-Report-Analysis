@@ -273,12 +273,12 @@ class TestDempsterCombine:
 
 class TestPignisticTransform:
     def test_basic(self):
-        """m(Θ) 按比例分摊到各归因"""
+        """m(Θ) 单列"其他原因"桶，不摊回已知归因"""
         mass = {"原因A": 0.60, "原因B": 0.15, "Θ": 0.25}
         probs = _pignistic_transform(mass)
-        # prob(A) = 0.60/(1-0.25) = 0.80, prob(B) = 0.15/0.75 = 0.20
-        assert probs["原因A"] == pytest.approx(0.80, rel=1e-4)
-        assert probs["原因B"] == pytest.approx(0.20, rel=1e-4)
+        assert probs["原因A"] == pytest.approx(0.60, rel=1e-4)
+        assert probs["原因B"] == pytest.approx(0.15, rel=1e-4)
+        assert probs["其他原因"] == pytest.approx(0.25, rel=1e-4)
         assert abs(sum(probs.values()) - 1.0) < 1e-6
         assert "Θ" not in probs
 

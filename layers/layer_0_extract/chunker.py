@@ -300,8 +300,10 @@ class DocumentChunker:
         if not all_tables:
             return empty
 
-        # 核心表粗筛: 只保留三大报表候选（合并+母公司，表头含"附注"列+日期列）。
-        # 附注明细表（财务区里可能混入的几百张）不进财务数据，避免 LLM 分类负载失控。
+        # 跨页合并: 同列数的连续表格拼接（如BS跨2页，PL跨页）
+        all_tables = _merge_same_column_tables(all_tables)
+
+        # 核心表粗筛
         core_tables = []
         for t in all_tables:
             rows = t.get("rows", [])
@@ -315,7 +317,11 @@ class DocumentChunker:
             return empty
 
         # LLM 分类: 每张表 → {statement_type, report_scope}
-        classifications = self._classify_tables_with_llm(core_tables)
+        try:
+            classifications = self._classify_tables_with_llm(core_tables)
+        except Exception as e:
+            logger.warning(f"LLM 表分类失败，降级规则匹配: {e}")
+            classifications = _rule_based_classify(core_tables)
 
         result: dict[str, list[dict]] = dict(empty)
         for i, table in enumerate(core_tables):
@@ -324,7 +330,6 @@ class DocumentChunker:
             if not rows or len(rows) < 2:
                 continue
 
-            # 分类必须来自 LLM，不设降级
             table_id = f"table_{i}"
             cls = classifications.get(table_id)
             if not cls:
@@ -634,3 +639,90 @@ class DocumentChunker:
             if match:
                 return match.group(1).strip()
         return None
+
+
+# ────────────────────────────────────────
+# 跨页表格合并
+# ────────────────────────────────────────
+
+def _merge_same_column_tables(tables: list[dict]) -> list[dict]:
+    """合并连续页上列数相同的表格（三大报表常跨2-3页）
+
+    判断: 两张表相邻且列数相同 -> 拼接为一（第2张去表头行）
+    """
+    if len(tables) <= 1:
+        return tables
+
+    merged = []
+    for t in tables:
+        rows = t.get("rows", [])
+        if not rows:
+            merged.append(t)
+            continue
+        cols = len(rows[0]) if rows[0] else 0
+
+        if merged and merged[-1].get("page_number", 0) == t.get("page_number", 0) - 1:
+            prev = merged[-1]
+            prev_rows = prev.get("rows", [])
+            prev_cols = len(prev_rows[0]) if prev_rows else 0
+            if prev_cols == cols and cols >= 3:
+                # 同列数连续页 -> 合并（跳过当前表的表头行）
+                skip = 1 if _looks_like_header_row(rows[0]) else 0
+                merged[-1] = {**prev, "rows": prev_rows + rows[skip:],
+                              "row_count": len(prev_rows) + max(0, len(rows) - skip)}
+                continue
+        merged.append(t)
+    return merged
+
+
+def _looks_like_header_row(row: list[str | None]) -> bool:
+    """判断一行是否像表头（含'项目''附注'等且不含纯数字）"""
+    text = " ".join(str(c) for c in row if c)
+    has_kw = any(kw in text for kw in ["项目", "附注", "科目"])
+    has_digit = any(c.isdigit() for c in text.replace(",", ""))
+    return has_kw and not has_digit
+
+
+# ────────────────────────────────────────
+# 规则降级: LLM 不可用时基于表头关键词分类
+# ────────────────────────────────────────
+
+def _rule_based_classify(tables: list[dict]) -> dict[str, dict]:
+    """根据表头第一行关键词将表格分为 BS/PL/CF 三类（不依赖 LLM）
+
+    Returns: {"table_0": {"statement_type": "balance_sheet", "report_scope": "合并报表"}, ...}
+    """
+    bs_kw = ["资产", "负债", "所有者权益"]
+    pl_kw = ["收入", "利润", "成本", "费用"]
+    cf_kw = ["现金", "投资活动", "筹资活动"]
+
+    result = {}
+    for i, table in enumerate(tables):
+        rows = table.get("rows", [])
+        if not rows:
+            continue
+        # 合并表头+前10行数据一起判断（表头通常是"项目 附注 日期"的通配格式）
+        all_text = " ".join(
+            " ".join(str(c) for c in row if c)
+            for row in rows[:12]
+        ).lower()
+
+        if any(kw in all_text for kw in bs_kw):
+            stype = "balance_sheet"
+        elif any(kw in all_text for kw in pl_kw):
+            stype = "income_statement"
+        elif any(kw in all_text for kw in cf_kw):
+            stype = "cashflow_statement"
+        else:
+            continue
+
+        # 标题含"合并"或"母公司" → 默认合并
+        scope = "合并报表"
+        all_text_lower = " ".join(" ".join(str(c) for c in row if c) for row in rows[:5]).lower()
+        if "母公司" in all_text_lower:
+            scope = "母公司报表"
+
+        result[f"table_{i}"] = {"statement_type": stype, "report_scope": scope}
+
+    logger.info(f"规则分类: {len(result)}/{len(tables)} 张表归属核心报表")
+    return result

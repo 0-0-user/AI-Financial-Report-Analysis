@@ -10,7 +10,10 @@ v2 新增:
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Optional
+
+import yaml
 
 from schemas.raw_doc import RawDocument, RawTableRow
 from schemas.b0_guide import B0Guide, TableGuide, FieldMapping, ColumnHeader
@@ -93,8 +96,12 @@ def _process_one_table(table_name: str, rows: list[RawTableRow]) -> Optional[Tab
     # 2. 提取多级表头
     header_info = _parse_multi_level_header(rows, is_row_major)
 
-    # 3. 字段映射 (LLM 识别，失败则异常传播——不做降级) 
-    return _llm_guide(table_name, header_info, rows, is_row_major)
+    # 3. 字段映射 (LLM 优先, 失败规则降级)
+    try:
+        return _llm_guide(table_name, header_info, rows, is_row_major)
+    except Exception as e:
+        logger.warning(f"LLM 表头失败, 降级规则: {e}")
+        return _rule_based_guide(table_name, header_info, rows, is_row_major)
 
 
 # ═══════════════════════════════════════════════
@@ -299,3 +306,68 @@ def _parse_llm_response(raw: str) -> dict:
                     f"LLM 返回的 JSON 不完整（可能被截断）: {e}"
                 ) from e
         raise ValueError("LLM 返回的内容不是有效 JSON")
+
+
+# ═══════════════════════════════════════════════
+# 规则降级 (无 LLM 时)
+# ═══════════════════════════════════════════════
+
+_FIELDS_CFG = Path("config/financial_fields.yaml")
+_VARIANT_IDX: dict[str, str] | None = None
+
+
+def _build_variant_index() -> dict[str, str]:
+    global _VARIANT_IDX
+    if _VARIANT_IDX is not None:
+        return _VARIANT_IDX
+    idx: dict[str, str] = {}
+    if _FIELDS_CFG.exists():
+        with open(_FIELDS_CFG, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        fields = cfg.get("fields", {})
+        eng = cfg.get("field_english_aliases", {})
+        for sn, info in fields.items():
+            for v in info.get("chinese_variants", []):
+                idx[v] = sn
+            for v in eng.get(sn, []):
+                idx[v.lower()] = sn
+    _VARIANT_IDX = idx
+    return idx
+
+
+def _rule_based_guide(
+    table_name: str, header_info: dict,
+    all_rows: list[RawTableRow], is_row_major: bool,
+) -> TableGuide:
+    """规则匹配: col_0 全字优先 + 子串兜底"""
+    idx = _build_variant_index()
+    data_rows = all_rows[header_info["data_start_row"]:]
+    value_cols = header_info.get("value_col_indices", [1, 2])
+    field_mappings: list[FieldMapping] = []
+
+    for row in data_rows:
+        cols = row.columns
+        if not cols:
+            continue
+        col0 = str(list(cols.values())[0]).replace("\n", "").strip()
+        row_text = " ".join(str(v).replace("\n", " ") for v in cols.values())
+
+        matched = False
+        if col0 in idx:
+            field_mappings.append(FieldMapping(raw_name=col0, standard_name=idx[col0],
+                row_index=row.row_index, col_index=value_cols[0] if value_cols else 1,
+                unit=header_info["unit"]))
+            matched = True
+        if not matched:
+            for variant, std_name in idx.items():
+                if variant in col0 or col0 in variant:
+                    field_mappings.append(FieldMapping(raw_name=variant, standard_name=std_name,
+                        row_index=row.row_index, col_index=value_cols[0] if value_cols else 1,
+                        unit=header_info["unit"]))
+                    break
+
+    columns = [ColumnHeader(index=vc, raw_text=f"val{i}", standard_name=f"value_{i}")
+               for i, vc in enumerate(value_cols)]
+    return TableGuide(table_name=table_name, report_type=header_info["report_type"],
+        overall_unit=header_info["unit"], columns=columns, field_mappings=field_mappings,
+        layout=header_info["layout"])

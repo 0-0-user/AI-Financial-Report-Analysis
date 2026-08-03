@@ -25,13 +25,12 @@ def run(ctx: PipelineContext) -> None:
 
     validation = run_validation(financials)
 
-    if not validation.is_valid:
-        tracer.milestone("B1", "勾稽校验", "failed", validation.error_message or "未通过")
-        ctx.validation_passed = False
-        ctx.errors.append(f"勾稽校验失败: {validation.error_message}")
-        return
-
-    tracer.milestone("B1", "勾稽校验", "success", f"通过 ({len(validation.checks)} 项检查)")
-    ctx.validation_passed = True
     ctx.financials = financials
     ctx.parent_financials = parent_financials
+    ctx.validation_passed = validation.is_valid
+
+    if not validation.is_valid:
+        tracer.milestone("B1", "勾稽校验", "failed", validation.error_message or "未通过")
+        ctx.errors.append(f"勾稽校验失败: {validation.error_message}")
+    else:
+        tracer.milestone("B1", "勾稽校验", "success", f"通过 ({len(validation.checks)} 项检查)")

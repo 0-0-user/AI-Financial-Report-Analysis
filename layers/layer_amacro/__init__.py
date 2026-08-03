@@ -16,5 +16,10 @@ from layers.layer_a_benchmark.a0_macro_search import run_macro_search
 
 @registry.register("layer_amacro", requires=["raw_doc", "tags", "financials"])
 def run(ctx: PipelineContext) -> None:
-    """执行宏观搜索，结果存入 ctx.macro_facts 供 D1 路2 使用"""
-    ctx.macro_facts = run_macro_search(ctx)
+    """执行宏观搜索（LLM 失败时优雅降级为空）"""
+    try:
+        ctx.macro_facts = run_macro_search(ctx)
+    except Exception as e:
+        from pipeline.tracer import tracer
+        tracer.milestone("A0", "宏观搜索", "warning", f"LLM不可用, 跳过: {e}")
+        ctx.macro_facts = []

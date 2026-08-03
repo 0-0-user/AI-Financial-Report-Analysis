@@ -197,9 +197,21 @@ def _build_row_index(
         if _is_sub_item_row(row_text):
             continue
         for name in known_names:
-            if name in row_text:
-                val_str = _find_numeric_column(cols)
+            if name not in row_text:
+                continue
+            val_str = _find_numeric_column(cols)
+            existing = idx.get(name)
+            if existing is None:
                 idx[name] = (row, val_str)
+            elif val_str:
+                # 保留绝对值更大的（合并报表 > 母公司 > 附注小表）
+                try:
+                    new_val = abs(_parse_number(val_str) or 0)
+                    old_val = abs(_parse_number(existing[1]) or 0) if existing[1] else 0
+                    if new_val > old_val:
+                        idx[name] = (row, val_str)
+                except (ValueError, TypeError):
+                    pass
     return idx
 
 

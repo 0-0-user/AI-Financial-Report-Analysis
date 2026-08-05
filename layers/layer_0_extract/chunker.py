@@ -260,9 +260,19 @@ class DocumentChunker:
                 if norm:
                     header_cells.append(norm)
         text = " ".join(header_cells)
+        # 年报: 项目|附注|日期; 季报: 项目|日期（无附注列, 只有3列）
+        has_date_col = (
+            ("12月31日" in text) or ("年度" in text)
+            or ("3月31日" in text) or ("6月30日" in text) or ("9月30日" in text)
+            or ("第一季度" in text) or ("上半年" in text) or ("前三季度" in text)
+        )
+        if not has_date_col:
+            return False
+        # 年报标准格式须有附注列; 季报只有3列(项目|本期|上期), 无附注
         has_note_col = "附注" in text
-        has_date_col = ("12月31日" in text) or ("年度" in text)
-        return has_note_col and has_date_col
+        n_cols = len(rows[0]) if rows else 0
+        is_quarterly = n_cols <= 3 and ("3月31日" in text or "第一季度" in text)
+        return has_note_col or is_quarterly
 
     def _find_page_statement_title(self, page_num: int) -> str:
         """在该页文本中找三大报表标题（含合并/母公司前缀）
@@ -666,13 +676,40 @@ def _merge_same_column_tables(tables: list[dict]) -> list[dict]:
             prev_rows = prev.get("rows", [])
             prev_cols = len(prev_rows[0]) if prev_rows else 0
             if prev_cols == cols and cols >= 3:
-                # 同列数连续页 -> 合并（跳过当前表的表头行）
-                skip = 1 if _looks_like_header_row(rows[0]) else 0
-                merged[-1] = {**prev, "rows": prev_rows + rows[skip:],
-                              "row_count": len(prev_rows) + max(0, len(rows) - skip)}
-                continue
+                # 同一张报表的延续: 日期模式一致或延续行无表头(空类型)时合并
+                prev_date_type = _date_type_of_header(prev_rows[:2])
+                curr_date_type = _date_type_of_header(rows[:2])
+                # 空类型 = 延续行无独立表头, 继承上一张表的类型继续合并
+                can_merge = (prev_date_type == curr_date_type
+                             or not curr_date_type
+                             or not prev_date_type)
+                if can_merge:
+                    skip = 1 if _looks_like_header_row(rows[0]) else 0
+                    merged[-1] = {**prev, "rows": prev_rows + rows[skip:],
+                                  "page_number": t.get("page_number", 0),
+                                  "row_count": len(prev_rows) + max(0, len(rows) - skip)}
+                    continue
         merged.append(t)
     return merged
+
+
+def _date_type_of_header(rows: list[list]) -> str:
+    """识别表头日期类型: 'annual_bs'|'annual_pl'|'q1_bs'|'q1_pl'|'q1_cf'|'' """
+    text = " ".join(str(c) for r in rows for c in r if c)
+    if "12月31日" in text: return "annual_bs"
+    if "3月31日" in text or "6月30日" in text or "9月30日" in text: return "q_bs"
+    if "第一季度" in text or "上半年" in text or "前三季度" in text:
+        if any(kw in text for kw in ["现金","投资活动","筹资活动"]):
+            return "q_cf"
+        if any(kw in text for kw in ["收入","成本","利润","费用","毛利"]):
+            return "q_pl"
+        return "q_pl"  # 默认利润表
+    if "年度" in text: return "annual_pl"
+    # 表头没有明确日期标记->可能此表是延续(但无表头行)
+    # 返回空串表示无法判断类型,沿用上一张表的类型决定是否合并
+    if any(kw in text for kw in ["收入","成本","销售费用","利润"]): return "q_pl"
+    if any(kw in text for kw in ["现金","投资","筹资"]): return "q_cf"
+    return ""
 
 
 def _looks_like_header_row(row: list[str | None]) -> bool:

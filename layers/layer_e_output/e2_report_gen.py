@@ -602,7 +602,7 @@ def _build_bull_bear(ctx: PipelineContext) -> tuple[list[str], list[str]]:
 # Markdown 渲染
 # ════════════════════════════════════════════
 
-def render_to_markdown(report: Report) -> str:
+def render_to_markdown(report: Report, ctx: PipelineContext | None = None) -> str:
     """将结构化 Report 渲染为 Markdown 文档"""
     lines = []
 
@@ -616,7 +616,7 @@ def render_to_markdown(report: Report) -> str:
     lines.append("")
 
     # ── 企业经营全景 (新增) ──
-    overview = _render_business_overview_md(report)
+    overview = _render_business_overview_md(report, ctx)
     if overview:
         lines.append("---")
         lines.append("")
@@ -764,26 +764,57 @@ def render_to_markdown(report: Report) -> str:
 # 企业经营全景 (新增, 纯 Markdown, 不修改原有逻辑)
 # ════════════════════════════════════════════
 
-def _render_business_overview_md(report: Report) -> str:
-    """从 Report 已有数据渲染经营全景"""
+def _render_business_overview_md(report: Report, ctx: PipelineContext | None = None) -> str:
+    """从 Report + PipelineContext 渲染经营全景（含核心财务数据）"""
     company = report.company_name or "未知"
     assessment = report.overall_assessment
     ti = report.trust_interval
     sb = report.score_breakdown
     anomalies = report.core_anomalies or []
-    bplus_count = sum(1 for a in anomalies if a.source == "B+")
-    c_count = sum(1 for a in anomalies if a.source == "C")
     final_score = assessment.score if assessment else 0
     tier = assessment.confidence_tier if assessment else "N/A"
     peers = assessment.peer_comparisons if assessment else []
 
     lines = ["## 一、企业经营全景", ""]
 
+    # ── 核心财务指标 (从 ctx.financials 提取) ──
+    if ctx and ctx.financials:
+        fs = ctx.financials
+        bs = fs.balance_sheet
+        pl = fs.income_statement
+        cf = fs.cashflow
+
+        def _v(d, k): return d.get(k).value if d.get(k) else None
+        ta = _v(bs, "Total_Assets")
+        tl = _v(bs, "Total_Liabilities")
+        eq = _v(bs, "Equity_Total")
+        rev = _v(pl, "Revenue_Total")
+        np_ = _v(pl, "Net_Profit")
+        ocf = _v(cf, "Operating_Cash_Flow")
+
+        lines.append("### 核心财务指标")
+        lines.append("")
+        lines.append("| 指标 | 金额 |")
+        lines.append("|------|------|")
+        if ta: lines.append(f"| 总资产 | {ta/1e8:,.2f} 亿 |")
+        if tl: lines.append(f"| 总负债 | {tl/1e8:,.2f} 亿 |")
+        if eq: lines.append(f"| 净资产 | {eq/1e8:,.2f} 亿 |")
+        if rev: lines.append(f"| 营业收入 | {rev/1e8:,.2f} 亿 |")
+        if np_: lines.append(f"| 净利润 | {np_/1e8:,.2f} 亿 |")
+        if ocf: lines.append(f"| 经营现金流 | {ocf/1e8:,.2f} 亿 |")
+        if ta and rev and tl:
+            lines.append(f"| 资产负债率 | {tl/ta*100:.1f}% |")
+        if rev and np_ and rev > 0:
+            lines.append(f"| 净利率 | {np_/rev*100:.1f}% |")
+        lines.append("")
+
+    # ── 行业 ──
     if peers:
         lines.append(f"**可比行业组**: {'、'.join(p.name for p in peers[:5])} 等 {len(peers)} 家企业")
-    lines.append("")
+        lines.append("")
 
-    lines.append("## 二、财务健康度快照")
+    # ── 财务健康 ──
+    lines.append("### 财务健康度")
     lines.append("")
     lines.append(f"| 维度 | 评估 |")
     lines.append(f"|------|------|")
@@ -791,23 +822,24 @@ def _render_business_overview_md(report: Report) -> str:
     lines.append(f"| 置信度 | {tier} |")
     if ti:
         lines.append(f"| 不确定性区间 | [{ti.lower_bound}, {ti.upper_bound}] |")
-    lines.append(f"| C层偏差异常 | {c_count} 项 |")
-    lines.append(f"| B+层逻辑异常 | {bplus_count} 项 |")
+    bplus_count = sum(1 for a in anomalies if a.source == "B+")
+    c_count = sum(1 for a in anomalies if a.source == "C")
+    lines.append(f"| 异常指标 | C层 {c_count} 项, B+层 {bplus_count} 项 |")
     lines.append("")
 
     if final_score >= 90:
-        health = "优秀 — 财务数据整体稳健，未发现显著异常"
+        health = "优秀 — 财务稳健"
     elif final_score >= 75:
-        health = "良好 — 个别指标需关注，整体风险可控"
+        health = "良好 — 风险可控"
     elif final_score >= 60:
-        health = "一般 — 存在多项偏差异常，建议审慎分析"
+        health = "一般 — 建议审慎"
     else:
-        health = "需关注 — 多项指标偏离行业基准，存在明显风险信号"
+        health = "需关注 — 存在风险信号"
     lines.append(f"**诊断**: {health}")
     lines.append("")
 
     if anomalies:
-        lines.append("### 需关注的风险点")
+        lines.append("### 风险点")
         lines.append("")
         for a in anomalies[:8]:
             tag = "🔴" if a.severity == "extreme" else "🟡"
@@ -815,24 +847,15 @@ def _render_business_overview_md(report: Report) -> str:
             cause_text = ""
             if probs:
                 top = max(probs, key=probs.get)
-                pct = f"{probs[top]*100:.0f}%"
-                cause_text = f" — 最可能: {top} ({pct})"
+                cause_text = f" — {top} ({probs[top]*100:.0f}%)"
             lines.append(f"- {tag} [{a.source}] **{a.indicator}**{cause_text}")
         lines.append("")
 
     if peers:
-        lines.append("### 同行对比组")
+        lines.append("### 同行对比")
         lines.append("")
         for i, p in enumerate(peers[:5], 1):
             lines.append(f"{i}. **{p.company_name}** (相似度 {p.similarity_score:.2f})")
-        lines.append("")
-
-    if sb and sb.anomaly_details:
-        lines.append("### 扣分明细")
-        lines.append("")
-        for d in sb.anomaly_details:
-            causes = ", ".join(f"{c.cause}({c.probability*100:.0f}%)" for c in d.causes) if d.causes else "N/A"
-            lines.append(f"- {d.indicator} [{d.source}]: -{d.anomaly_score:.2f} ({causes}, K={d.k_value:.2f})")
         lines.append("")
 
     return "\n".join(lines)

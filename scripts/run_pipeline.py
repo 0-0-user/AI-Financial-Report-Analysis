@@ -25,6 +25,8 @@
     python scripts/run_pipeline.py --pdf xxx.pdf --output data/outputs
 """
 
+from dotenv import load_dotenv; load_dotenv()
+
 import argparse
 import json
 import logging

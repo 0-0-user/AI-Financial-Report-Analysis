@@ -7,6 +7,8 @@
 启动：python -m uvicorn web.app:app --port 8000
 """
 
+from dotenv import load_dotenv; load_dotenv()
+
 import json
 import os
 import threading

@@ -4,6 +4,8 @@
 可被 Web 后端（web/app.py）在后台线程调用，并保留流水账/报告产出。
 """
 
+from dotenv import load_dotenv; load_dotenv()
+
 import json
 import logging
 import threading
@@ -72,7 +74,7 @@ def run_single_analysis(pdf_path: str, controls: AnalysisControl | None = None) 
 
     try:
         from layers.layer_e_output.e2_report_gen import render_to_markdown
-        md_content = render_to_markdown(report)
+        md_content = render_to_markdown(report, orch._last_ctx)
         with open(output_dir / f"{stem}_report.md", "w", encoding="utf-8") as f:
             f.write(md_content)
     except Exception as e:

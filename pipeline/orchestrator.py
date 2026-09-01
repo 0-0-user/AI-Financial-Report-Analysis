@@ -46,6 +46,7 @@ class Orchestrator:
     """流水线引擎，调度各层执行 (不允许跳过，失败即终止) """
 
     def __init__(self):
+        self._last_ctx: PipelineContext | None = None
         self._step_order = [
             "layer_0",
             "layer_a",
@@ -127,6 +128,7 @@ class Orchestrator:
                 logger.error(err)
             return self._build_error_report(ctx)
 
+        self._last_ctx = ctx
         return ctx.report
 
     @staticmethod

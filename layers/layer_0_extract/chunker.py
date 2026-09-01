@@ -34,9 +34,15 @@ class DocumentChunker:
     #   3. 降级方案: 无匹配时按经验规则估算
     SECTION_PATTERNS = {
         "financial_data": [
-            # 实际财务报表章节标题 ("二、财务报表 合并资产负债表"，不在目录/审计引言段) 
+            # 实际财务报表章节标题 ("二、财务报表 合并资产负债表"，不在目录/审计引言段)
             r"二、财务报表",
             r"财务报表\s*\n+\s*合并资产负债表",
+            # 覆盖"第X节 财务报告"格式 (如苏美达"第八节 财务报告")
+            # 必须行首锚定，避免误匹配正文中"参见第八节财务报告相关部分"等交叉引用
+            r"(?m)^\s*第[一二三四五六七八九十\d]+节\s*财务报告",
+            # 三大报表标题作为兜底信号 (年报财务章节必有)
+            r"合并资产负债表",
+            r"母公司资产负债表",
         ],
         "management_discussion": [
             r"第三节\s*管理层讨论与分析",
@@ -218,9 +224,9 @@ class DocumentChunker:
         if section == "company_overview":
             return (first_page, min(first_page + 10, last_page))
         elif section == "financial_data":
-            # 财报通常在中间偏前
-            mid = total_pages // 3
-            return (page_texts[mid][0], page_texts[min(mid + 30, total_pages - 1)][0])
+            # 财报通常在文档前1/6处开始，覆盖80页确保捕获合并+母公司三大报表
+            start = total_pages // 6
+            return (page_texts[start][0], page_texts[min(start + 80, total_pages - 1)][0])
         elif section == "management_discussion":
             mid = total_pages // 2
             return (page_texts[mid][0], page_texts[min(mid + 40, total_pages - 1)][0])

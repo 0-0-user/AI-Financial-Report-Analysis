@@ -147,7 +147,7 @@
   ],
   "key_technical_decisions": [
     "PDF 解析：仅 pdfplumber，配合 OCR 文本纠错",
-    "硬标签：仅同花顺行业分类 CSV，代码查表，无 LLM",
+    "硬标签：仅申万行业分类 CSV，代码查表，无 LLM",
     "财务画像：A2 从 akshare 实际数据计算 6 维连续值，(x-median)/IQR 标准化",
     "同行匹配：连续值余弦相似度 + 双池（Top 5 + Top 20%）",
     "异常检测：MAD 中位数绝对偏差（抗暴雷）",

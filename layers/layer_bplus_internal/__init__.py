@@ -18,7 +18,12 @@ Step 3: 内控质量评估 (朱亚萍2015)
 from pipeline.step_registry import registry
 from pipeline.context import PipelineContext
 from pipeline.tracer import tracer
-from .logic_checks import run_all_checks, run_internal_control_check, calc_risk_level
+from .logic_checks import (
+    run_all_checks,
+    run_internal_control_check,
+    calc_risk_level,
+    resolve_industry_key,
+)
 
 
 @registry.register("layer_bplus", requires=["validation_passed", "financials", "tags"])
@@ -27,12 +32,9 @@ def run(ctx: PipelineContext) -> None:
         ctx.warnings.append("B层校验未通过，跳过B+层检查")
         return
 
-    # 行业
-    industry = None
-    if ctx.tags and ctx.tags.hard_tags:
-        for ht in ctx.tags.hard_tags:
-            if ht.system == "同花顺三级行业" and ht.value:
-                industry = ht.value; break
+    # 行业: 阈值表的键跨层级混着放 (银行是一级, 化学制药是二级, 锂电池是三级),
+    # 由细到粗找第一个真正在表里的名字
+    industry = resolve_industry_key(ctx.tags.hard_tags) if ctx.tags else ""
 
     # 国企/民企判断 (从公司名称或标签推断) 
     is_soe = _detect_soe(ctx)

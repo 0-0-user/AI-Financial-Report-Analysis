@@ -37,8 +37,8 @@ def _make_full_context() -> PipelineContext:
         company_name="贵州茅台",
         stock_code="600519",
         hard_tags=[
-            HardTag(system="同花顺三级行业", value="白酒"),
-            HardTag(system="同花顺二级行业", value="饮料制造"),
+            HardTag(system="申万三级行业", value="白酒Ⅲ"),
+            HardTag(system="申万二级行业", value="白酒Ⅱ"),
         ],
         financial_profile=FinancialProfile(
             values=[1.0, 1.0, 0.2, 0.2, 0.2, 0.8],

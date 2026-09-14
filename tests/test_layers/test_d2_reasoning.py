@@ -27,6 +27,7 @@ from layers.layer_d_reasoning.d2_probability import (
 )
 from schemas.anomaly import LogicAnomaly, DeviationAnomaly
 from schemas.reasoning import Explanation, Hypothesis
+from layers.layer_e_output.e1_scoring import OTHER_CAUSE
 
 
 # ============================================================
@@ -293,6 +294,19 @@ class TestPignisticTransform:
         probs = _pignistic_transform(mass)
         assert abs(sum(probs.values()) - 1.0) < 1e-6
 
+    def test_hypothesis_named_other_cause_does_not_swallow_theta(self):
+        """假设与 Θ 撞名时必须累加，不得互相覆盖。
+
+        D1 的 LLM 没有命名白名单，理论上可能把某条假设就叫「其他原因」，
+        而它恰好是 Θ 的预留桶名。
+        """
+        mass = {"其他原因": 0.3, "行业需求下降": 0.4, "Θ": 0.3}
+        probs = _pignistic_transform(mass)
+        # 0.3（假设）+ 0.3（Θ）而非其中一方被覆盖
+        assert probs["其他原因"] == pytest.approx(0.6, rel=1e-4)
+        assert probs["行业需求下降"] == pytest.approx(0.4, rel=1e-4)
+        assert abs(sum(probs.values()) - 1.0) < 1e-6
+
 
 # ============================================================
 # _build_conflict_map
@@ -415,3 +429,62 @@ class TestRunProbabilityAllocation:
         meta = pa.ds_metadata
         assert isinstance(meta.get("conflict_K"), (int, float))
         assert isinstance(meta.get("severe_conflict"), bool)
+
+    def test_merged_causes_preserves_indices(self, monkeypatch):
+        """回归: merged_causes 必须留下下标，不能只存 from_path1/2 布尔摘要。
+
+        masses 的 key 是 LLM 语义合并时【重新起】的统一归因名，和 D1 的
+        Explanation.summary / Hypothesis.hypothesis 不是同一套字符串。
+        E2 做证据溯源时只有靠下标才能回到 D1 的原文出处。
+        曾经这里只存 bool()，把映射压没了，E2 只好改用名称回找 ——
+        实测苏美达 29 条归因 29 条落空，证据全退化成系统自造的"综合分析"。
+        """
+        def mock_merge(indicator, lookups, hypotheses):
+            return [
+                {"name": "统一命名A", "path1_indices": [0, 1], "path2_indices": [2],
+                 "conflicts_with": []},
+                {"name": "统一命名B", "path1_indices": [], "path2_indices": [0],
+                 "conflicts_with": []},
+            ]
+        monkeypatch.setattr(
+            "layers.layer_d_reasoning.d2_probability._llm_merge_conflict",
+            mock_merge,
+        )
+
+        lookups = [
+            Explanation(summary="原文摘要0", source_text="原文0", page_number=15),
+            Explanation(summary="原文摘要1", source_text="原文1", page_number=16),
+        ]
+        hypotheses = [
+            Hypothesis(hypothesis="假设0", reasoning="推演0", source="宏观事实", confidence_rank=1),
+            Hypothesis(hypothesis="假设1", reasoning="推演1", source="行业新闻", confidence_rank=2),
+            Hypothesis(hypothesis="假设2", reasoning="推演2", source="偏差数据", confidence_rank=3),
+        ]
+        results = [{
+            "source": "C",
+            "anomaly": DeviationAnomaly(
+                indicator="存货周转率", actual_value=0.3, benchmark_value=0.8,
+                mad_multiple=3.5, severity="extreme",
+            ),
+            "lookup": lookups,
+            "hypotheses": hypotheses,
+        }]
+        assignments = run_probability_allocation(results)
+
+        merged = assignments[0].ds_metadata["merged_causes"]
+        by_name = {m["name"]: m for m in merged}
+        assert by_name["统一命名A"]["path1_indices"] == [0, 1]
+        assert by_name["统一命名A"]["path2_indices"] == [2]
+        assert by_name["统一命名B"]["path1_indices"] == []
+        assert by_name["统一命名B"]["path2_indices"] == [0]
+        # 布尔摘要保留，兼容旧读取方
+        assert by_name["统一命名B"]["from_path1"] is False
+        assert by_name["统一命名B"]["from_path2"] is True
+
+        # 归纳名确实与 D1 原文对不上 —— 这正是必须靠下标的原因
+        for m in merged:
+            assert m["name"] not in [lk.summary for lk in lookups]
+
+        # probabilities 的 key 就是这些归纳名，外加 Θ 的记名（「其他原因」）
+        # —— 这是 E2 必须把 OTHER_CAUSE 排除在证据列表之外的原因
+        assert set(assignments[0].probabilities) == {"统一命名A", "统一命名B", OTHER_CAUSE}

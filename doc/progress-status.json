@@ -32,7 +32,7 @@
       "status": "✅ 全部完成（项目负责人实现）",
       "submodules": {
         "a0_macro_search.py": "✅ LLM生成搜索词 + SerpAPI搜索 + LLM提取宏观事实，v5.1 移除冗余函数",
-        "a1_tagging.py": "✅ 纯代码 CSV 查硬标签（同花顺三级/二级/一级），无 LLM",
+        "a1_tagging.py": "✅ 纯代码 CSV 查硬标签（申万三级/二级/一级），无 LLM",
         "a2_matcher.py": "✅ akshare 取数据，v5.1 连续值稳健标准化替代离散等级，余弦相似度匹配"
       }
     },
@@ -50,7 +50,7 @@
       "submodules": {
         "logic_checks.py": "✅ Step1 数据异常扫描（行业p75+规模修正）+ Step2 经营行为验证（国企/民企分判）+ Step3 内控质量（4项定性）",
         "fraud_patterns.py": "✅ 扩展 7 项造假检测（Beneish M-Score / Dechow F-Score / 证监会案例）",
-        "industry_thresholds.yaml": "✅ 新增 28 个同花顺三级行业专属分位数阈值（p25/p75）",
+        "industry_thresholds.yaml": "✅ 行业专属分位数阈值（p25/p75），键跨层级混放，按 三级→二级→一级 查找",
         "_detect_soe()": "✅ 国企/民企自动检测",
         "calc_severity()": "✅ 行业感知（industry-aware）升级"
       },

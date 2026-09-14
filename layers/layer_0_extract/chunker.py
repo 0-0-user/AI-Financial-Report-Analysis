@@ -325,8 +325,13 @@ class DocumentChunker:
             rows = t.get("rows", [])
             if rows and self._is_core_statement_table(rows):
                 t = dict(t)
-                # 补页面标题（如"母公司资产负债表"），供 LLM 判断合并/母公司
-                t["page_title"] = self._find_page_statement_title(t.get("page_number", 0))
+                # 补页面标题（如"母公司资产负债表"），供 LLM 判断合并/母公司。
+                # 必须按「起始页」查：跨页合并后 page_number 是末页，而报表标题
+                # 印在首页，且末页往往正是下一张报表的起始页 —— 按末页查会把
+                # 合并报表标成母公司（或反之），导致 LLM 的 report_scope 判反。
+                t["page_title"] = self._find_page_statement_title(
+                    t.get("start_page_number", t.get("page_number", 0))
+                )
                 core_tables.append(t)
         if not core_tables:
             logger.warning("财务区域未找到核心三大报表表")
@@ -665,15 +670,18 @@ def _merge_same_column_tables(tables: list[dict]) -> list[dict]:
     """合并连续页上列数相同的表格（三大报表常跨2-3页）
 
     判断: 两张表相邻且列数相同 -> 拼接为一（第2张去表头行）
+
+    合并后额外带 ``start_page_number``: ``page_number`` 被更新为最后一张
+    分表的页码，而报表标题印在首页，标题查询须用 ``start_page_number``。
     """
     if len(tables) <= 1:
-        return tables
+        return [{**t, "start_page_number": t.get("page_number", 0)} for t in tables]
 
     merged = []
     for t in tables:
         rows = t.get("rows", [])
         if not rows:
-            merged.append(t)
+            merged.append({**t, "start_page_number": t.get("page_number", 0)})
             continue
         cols = len(rows[0]) if rows[0] else 0
 
@@ -689,13 +697,23 @@ def _merge_same_column_tables(tables: list[dict]) -> list[dict]:
                 can_merge = (prev_date_type == curr_date_type
                              or not curr_date_type
                              or not prev_date_type)
+                # 首行若是报表表头(项目+日期), 说明这是一张新报表的开头而非续页。
+                # 仅靠日期类型无法区分报表边界: 合并BS与母公司BS的 dt 同为 annual_bs,
+                # 合并现金流量表的表头写"2025年度"还会被认成 annual_pl。
+                # 实测国电南瑞: 合并BS(p121-124) 与 母公司BS(p125-127) 列数同为4、
+                # 页码相邻、dt 同为 annual_bs, 因此被并成 191 行的怪表,
+                # 6 张核心报表塌缩成 2 张。以表头行作为边界即可正确切开。
+                if _is_statement_header_row(rows[0]):
+                    can_merge = False
                 if can_merge:
                     skip = 1 if _looks_like_header_row(rows[0]) else 0
                     merged[-1] = {**prev, "rows": prev_rows + rows[skip:],
                                   "page_number": t.get("page_number", 0),
+                                  "start_page_number": prev.get("start_page_number",
+                                                                prev.get("page_number", 0)),
                                   "row_count": len(prev_rows) + max(0, len(rows) - skip)}
                     continue
-        merged.append(t)
+        merged.append({**t, "start_page_number": t.get("page_number", 0)})
     return merged
 
 
@@ -711,10 +729,16 @@ def _date_type_of_header(rows: list[list]) -> str:
             return "q_pl"
         return "q_pl"  # 默认利润表
     if "年度" in text: return "annual_pl"
-    # 表头没有明确日期标记->可能此表是延续(但无表头行)
-    # 返回空串表示无法判断类型,沿用上一张表的类型决定是否合并
-    if any(kw in text for kw in ["收入","成本","销售费用","利润"]): return "q_pl"
-    if any(kw in text for kw in ["现金","投资","筹资"]): return "q_cf"
+    # 表头没有明确日期标记 -> 先判断这行是否真的像表头。
+    # 只有真表头(含"项目/科目/附注"且不含数字)才按关键词猜类型,
+    # 覆盖季报里不带"3月31日"字样的表头写法。
+    # 否则视为上一张报表的延续行(数据行), 返回空串让调用方沿用上一张的类型。
+    # 注: 早期版本对延续行也按关键词猜类型, 导致续页首行含"投资/现金/成本"
+    # 时被猜成 q_cf/q_pl, 与上一张的 annual_bs/annual_pl 不符而拒绝合并,
+    # 报表被截断成多块(实测苏美达母公司BS只剩 23/86 行)。
+    if _looks_like_header_row(rows[0] if rows else []):
+        if any(kw in text for kw in ["收入","成本","销售费用","利润"]): return "q_pl"
+        if any(kw in text for kw in ["现金","投资","筹资"]): return "q_cf"
     return ""
 
 
@@ -724,6 +748,24 @@ def _looks_like_header_row(row: list[str | None]) -> bool:
     has_kw = any(kw in text for kw in ["项目", "附注", "科目"])
     has_digit = any(c.isdigit() for c in text.replace(",", ""))
     return has_kw and not has_digit
+
+
+def _is_statement_header_row(row: list[str | None]) -> bool:
+    """判断一行是否是三大报表的表头行（如 "项目|附注|2025年12月31日|2024年12月31日"）
+
+    与 _looks_like_header_row 的区别: 报表表头**必然含日期数字**，
+    而那个函数要求不含数字（它认的是附注明细表那种 "项目|重要性标准" 样式），
+    故不能用它来识别报表边界。
+
+    用途: 跨页合并时区分「新报表的开头」与「上一张报表的续页」。
+    """
+    text = " ".join(str(c) for c in row if c)
+    has_item = any(kw in text for kw in ["项目", "科目"])
+    has_date = any(kw in text for kw in [
+        "12月31日", "3月31日", "6月30日", "9月30日",
+        "年度", "第一季度", "上半年", "前三季度",
+    ])
+    return has_item and has_date
 
 
 # ────────────────────────────────────────

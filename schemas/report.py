@@ -44,10 +44,12 @@ class AnomalyScoreDetail(BaseModel):
     w_phe: float                             # 现象严重性系数
     k_value: float                           # D-S 冲突系数
     delta: float                             # 1 - K
-    causes: list[CauseDetail]                # 各原因明细
-    anomaly_score: float                     # 该异常扣分 (中心值) 
-    score_bel: float = 0.0                   # 最悲观情景扣分 (Bel) 
-    score_pl: float = 0.0                    # 最乐观情景扣分 (Pl) 
+    causes: list[CauseDetail]                # 各原因明细 (不含"其他原因")
+    anomaly_score: float                     # 该异常扣分 (中心值)
+    score_bel: float = 0.0                   # 最悲观情景扣分 (Bel)
+    score_pl: float = 0.0                    # 最乐观情景扣分 (Pl)
+    m_theta: float = 0.0                     # 未归因质量 m(Θ), 即"其他原因"占比
+                                             # (1.0 = 完全无法归因, 用于置信度分级)
 
 
 class ScoreBreakdown(BaseModel):
@@ -72,6 +74,10 @@ class OverallAssessment(BaseModel):
     score: float                                 # 综合得分
     confidence_tier: str                         # 高置信度 / 中等置信度 / 低置信度
     peer_comparisons: list[PeerComparison]       # 同行对比列表
+    # 结论成立的前提条件不满足时的显式告示。
+    # 存在的意义: 让"没有检出异常"和"根本无法判定"在报告里长得不一样 ——
+    # 否则样本退化会被读成"公司各项指标都正常"。
+    caveats: list[str] = []
 
 
 class AnomalyEvidence(BaseModel):

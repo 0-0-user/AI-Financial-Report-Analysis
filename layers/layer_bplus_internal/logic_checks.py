@@ -18,6 +18,7 @@ from pathlib import Path
 
 from schemas.financial import FinancialStatement
 from schemas.anomaly import LogicAnomaly
+from schemas.tags import strip_level_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,8 @@ def _load_thresholds() -> dict:
         return yaml.safe_load(f)
 
 
-def _load_industry_thresholds(industry: str) -> dict | None:
+def _load_industry_table() -> dict:
+    """行业阈值表: {行业名: {阈值...}}"""
     global _INDUSTRY_CACHE
     if _INDUSTRY_CACHE is None:
         if not INDUSTRY_THRESHOLDS_PATH.exists():
@@ -45,10 +47,59 @@ def _load_industry_thresholds(industry: str) -> dict | None:
         else:
             with open(INDUSTRY_THRESHOLDS_PATH, encoding="utf-8") as f:
                 _INDUSTRY_CACHE = yaml.safe_load(f).get("industries", {})
-    cfg = _INDUSTRY_CACHE.get(industry)
-    if cfg and isinstance(cfg, dict) and any(v is not None for v in cfg.values()):
+    return _INDUSTRY_CACHE
+
+
+def _is_live_industry(cfg) -> bool:
+    """表里有这个键, 且它至少填了一个阈值 —— 否则取到也没用。
+
+    没填任何值的条目 (如 `房地产开发`) 视同不存在, 让调用方继续往下找更粗的层级。
+    """
+    return bool(cfg) and isinstance(cfg, dict) and any(v is not None for v in cfg.values())
+
+
+def resolve_industry_key(hard_tags) -> str:
+    """从硬标签解析出行业阈值表的键; 解析不出时返回空串。
+
+    阈值表的键**跨层级混着放**: `银行` 是一级行业名, `化学制药` 是二级,
+    `锂电池` 是三级。所以不能只认某一个级别 —— 按 三级 -> 二级 -> 一级
+    的顺序找第一个在表里真正存在的名字。
+
+    顺序不能反过来: 由粗到细会让一个既有三级又有二级行业命中的公司,
+    永远停在一级行业那种过宽的阈值上。
+
+    查表时每个候选名试两种写法: 原名, 以及剥掉罗马数字后缀的名字 ——
+    表里写的是 `中药`, 而申万标签给的是 `中药Ⅲ`。不剥后缀就永远命不中,
+    白白丢掉一批本该用上行业阈值的公司。
+    """
+    table = _load_industry_table()
+    if not table or not hard_tags:
+        return ""
+    for level in ("三级", "二级", "一级"):
+        system = f"申万{level}行业"
+        for ht in hard_tags:
+            if getattr(ht, "system", None) != system:
+                continue
+            value = (ht.value or "").strip()
+            if not value:
+                continue
+            for candidate in (value, strip_level_suffix(value)):
+                if _is_live_industry(table.get(candidate)):
+                    return candidate
+    return ""
+
+
+def _load_industry_thresholds(industry: str) -> dict | None:
+    table = _load_industry_table()
+    cfg = table.get(industry)
+    if _is_live_industry(cfg):
         return cfg
-    return _INDUSTRY_CACHE.get("fallback", {}) if isinstance(_INDUSTRY_CACHE, dict) else None
+    # 注意: 这里本来想退回 yaml 里的 `fallback` 市场基准 —— 但 _INDUSTRY_CACHE
+    # 装的是 `industries` 子字典, 在它上面取 "fallback" 永远是空。也就是说
+    # 那 14 个 fallback 阈值从来没被读过, 全部公司都落在 _get_ind_threshold 的
+    # 通用默认值上。这是已确认的缺陷, 会改变 83.8% 公司的阈值和 B+ 判定,
+    # 所以不跟本轮改名一起改, 单独一轮处理。
+    return {}
 
 
 def _get_ind_threshold(

@@ -135,19 +135,28 @@ def _extract_row_major(
     multiplier = _unit_to_multiplier(guide.overall_unit)
 
     # v3: 预建索引 {raw_name -> (row, numeric_col_value)}
-    row_index = _build_row_index(rows, guide.field_mappings)
+    prior_cols = _prior_period_columns(guide)
+    row_index = _build_row_index(rows, guide.field_mappings, prior_cols)
 
     for fm in guide.field_mappings:
         entry = row_index.get(fm.raw_name)
         if entry is None:
             # fallback: 坐标取数
-            value = _extract_value_fallback(rows, fm)
+            value = _extract_value_fallback(rows, fm, guide)
         else:
             row, val_str = entry
-            # 优先用 B0 映射的数值列（col_index），避免取到附注列（如"七、1"含数字被误当数值）
-            target_col = f"col_{fm.col_index}"
-            if target_col in row.columns and row.columns.get(target_col, "").strip():
-                val_str = row.columns.get(target_col, "")
+            # 优先用 B0 映射的数值列（col_index），避免取到附注列（如"七、1"含数字被误当数值）。
+            # 但要过两道关才采信 —— col_index 是 LLM 给的：
+            #   1. 这一列得**真解析得出数**。实测会指到 col_0 科目名列，
+            #      照单全收就会让 _parse_number("货币资金") 返回 None，
+            #      把已经按名字定位好的字段反手丢掉。
+            #   2. 这一列不能是上期/期初列。它解析得出数，但期间不对，
+            #      放过去就是静默把期初当期末（见 _is_prior_period）。
+            col_val_str = row.columns.get(f"col_{fm.col_index}", "")
+            if (col_val_str.strip()
+                    and _parse_number(col_val_str) is not None
+                    and not _is_prior_period(prior_cols, fm.col_index)):
+                val_str = col_val_str
             value = _parse_number(val_str) if val_str else None
 
         if value is None:
@@ -182,12 +191,14 @@ def _is_sub_item_row(row_text: str) -> bool:
 
 def _build_row_index(
     rows: list[RawTableRow], field_mappings: list[FieldMapping],
+    skip_cols: frozenset[int] = frozenset(),
 ) -> dict[str, tuple[RawTableRow, str | None]]:
     """预建 raw_name -> (row, 数值列) 索引，O(rows)
 
     对每行提取科目名 (col_0 或 col_0+col_1) ，查 field_mappings 中
     的 raw_name 是否在行文本中 -> 匹配则记录该行和最新数值列。
     跳过"归属于母公司/少数股东"细分行，避免合计字段子串误匹配。
+    `skip_cols` 是上期/期初列号 —— 它们不是可用的取数列。
     """
     idx: dict[str, tuple[RawTableRow, str | None]] = {}
     known_names = {fm.raw_name for fm in field_mappings}
@@ -199,7 +210,7 @@ def _build_row_index(
         for name in known_names:
             if name not in row_text:
                 continue
-            val_str = _find_numeric_column(cols)
+            val_str = _find_numeric_column(cols, skip_cols)
             existing = idx.get(name)
             if existing is None:
                 idx[name] = (row, val_str)
@@ -215,15 +226,112 @@ def _build_row_index(
     return idx
 
 
-def _extract_value_fallback(rows: list[RawTableRow], fm: FieldMapping) -> Optional[float]:
-    """坐标取数降级 (索引未命中时) """
+# 「上期/期初」类列 —— 取数不能选它们。整套流水线要的是**本期期末**数。
+_PRIOR_PERIOD_STANDARD_NAMES = frozenset({"begin_balance", "prior_amount"})
+
+
+def _prior_period_columns(guide) -> frozenset[int]:
+    """guide 里所有上期/期初列的列号。"""
+    return frozenset(
+        c.index for c in (getattr(guide, "columns", None) or [])
+        if c.standard_name in _PRIOR_PERIOD_STANDARD_NAMES
+    )
+
+
+def _is_prior_period(prior_cols: frozenset[int], col_index: int) -> bool:
+    """这一列是不是上期/期初列?
+
+    是的话, 就算它**解析得出数**也不能要 —— 值本身合法但期间不对,
+    放过去就是静默把期初当期末, 比丢字段更难发现 (报表里会明明白白
+    印着一个数, 只是它是去年的)。
+
+    拿不到列语义时 prior_cols 是空集, 于是恒为 False:
+    不知道不等于错, 不能因为不知道就丢数。
+    """
+    return col_index in prior_cols
+
+
+# source 桶名 -> B0 表名。用来从 B0Guide 里找回**那一张表**的列期间语义。
+_SOURCE_TABLE_NAMES = {
+    "balance_sheet": "资产负债表",
+    "income_statement": "利润表",
+    "cashflow": "现金流量表",
+}
+
+# 「本期」那一侧的期间标准名 —— 和 _PRIOR_PERIOD_STANDARD_NAMES 互补
+_CURRENT_PERIOD_STANDARD_NAMES = frozenset(
+    {"end_balance", "current_amount", "amount"})
+
+
+def _table_guide_for(guide, source: str, use_parent: bool):
+    """找出 source 桶对应的那份 TableGuide —— 为了拿它的列期间语义。
+
+    找不到返回 None，让调用方自己决定怎么办，而不是从别处借一个
+    看着像的列号。
+    """
+    want_name = _SOURCE_TABLE_NAMES.get(source)
+    want_type = "母公司报表" if use_parent else "合并报表"
+    for t in getattr(guide, "tables", None) or []:
+        if t.table_name == want_name and t.report_type == want_type:
+            return t
+    return None
+
+
+def _current_period_cell(columns: dict, table_guide) -> Optional[str]:
+    """这一行里**本期/期末**那一格的值。
+
+    旧代码写死 `for key in ("col_2", "col_3", "col_1")`，注释说 col_2 是
+    "本期/期末" —— 那只在 项目|附注|期末|期初 这种 4 列布局下成立。
+    3 列表 (项目|期末|期初) 里 col_2 是**期初**，于是 Monetary_Funds /
+    Inventory 这类关键合计字段被整批覆盖成去年的数，而且是无条件覆盖：
+    连 B1 刚按正确坐标取到的值也一并盖掉。
+
+    现在按表头给出的期间语义挑列。认不出语义时退回老顺序 ——
+    不知道不等于错，但无论如何都跳过已知的上期列。
+    """
+    prior = _prior_period_columns(table_guide)
+    for col in getattr(table_guide, "columns", None) or []:
+        if col.index in prior or col.standard_name not in _CURRENT_PERIOD_STANDARD_NAMES:
+            continue
+        v = columns.get(f"col_{col.index}", "")
+        if v and not _is_note_ref(v):
+            return v
+    # 拿不到期间语义: 退回老顺序, 但别再碰已知的上期列
+    for key in ("col_2", "col_3", "col_1"):
+        if int(key[4:]) in prior:
+            continue
+        v = columns.get(key, "")
+        if v and not _is_note_ref(v):
+            return v
+    return _find_numeric_column(columns, prior)
+
+
+def _extract_value_fallback(
+    rows: list[RawTableRow], fm: FieldMapping, guide,
+) -> Optional[float]:
+    """坐标取数降级 (索引未命中时)
+
+    坐标是 LLM 给的，可能是猜的，所以要先**验证**它落在真能解析出数的
+    单元格上。指到科目名列 / 文字说明列 / 上期列时就地在这一行里找
+    本期数值列，而不是把字段判成不存在 —— 后者是静默丢数。
+
+    `guide` 是必填的：它带的那份列期间语义是守卫的唯一依据。
+    给个 `guide=None` 的默认值看着"更宽容", 实际是让守卫**恒为假** ——
+    传漏了不报错, 只是安静地不再拦上期列。那正是本项目一直在犯的毛病。
+    """
     row_index = fm.row_index
     col_index = fm.col_index
-    if 0 <= row_index < len(rows):
-        val_str = rows[row_index].columns.get(f"col_{col_index}", "")
-        if val_str:
-            return _parse_number(val_str)
-    return None
+    if not (0 <= row_index < len(rows)):
+        return None
+    cols = rows[row_index].columns
+    prior_cols = _prior_period_columns(guide)
+    val_str = cols.get(f"col_{col_index}", "")
+    if val_str and not _is_prior_period(prior_cols, col_index):
+        parsed = _parse_number(val_str)
+        if parsed is not None:
+            return parsed
+    # 坐标不可信: 退回"这一行里第一个本期数值列"
+    return _parse_number(_find_numeric_column(cols, prior_cols) or "")
 
 
 # ═══════════════════════════════════════════════
@@ -281,8 +389,17 @@ def _is_note_ref(text) -> bool:
     return bool(re.match(r'^[一二三四五六七八九十]+[、.，,]\s*\d+$', t))
 
 
-def _find_numeric_column(columns: dict[str, str]) -> Optional[str]:
-    for val in columns.values():
+def _find_numeric_column(
+    columns: dict[str, str], skip: frozenset[int] = frozenset(),
+) -> Optional[str]:
+    """这一行里第一个像数值的列; `skip` 里的列号跳过。
+
+    非 `col_N` 形状的键不会被跳过 (也就不会被误伤)。
+    """
+    for key, val in columns.items():
+        if isinstance(key, str) and key.startswith("col_") and key[4:].isdigit():
+            if int(key[4:]) in skip:
+                continue
         if _is_note_ref(val):
             continue
         cleaned = str(val).replace(",", "").replace(" ", "").replace("%", "")
@@ -438,8 +555,10 @@ _KEY_TOTALS: list[tuple[str, str, list[str]]] = [
 def _extract_key_totals(raw_doc, guide, bs, pl, cf, use_parent: bool = False):
     """对关键合计字段做精确科目名提取，缺失时补上
 
-    用"科目列(col_0)精确等于候选名 + 取数值列(col_2=本期)"，
+    用"科目列(col_0)精确等于候选名 + 取本期数值列"，
     避免 B0 漏映射或子串匹配误命中"流动负债合计"等细分行。
+    本期列由表头的期间语义定（见 _current_period_cell）——
+    不是写死的 col_2。
     use_parent=True 时对母公司报表桶提取（供 B+ 母子资金分离度）。
     """
     from decimal import Decimal, ROUND_HALF_UP
@@ -458,19 +577,13 @@ def _extract_key_totals(raw_doc, guide, bs, pl, cf, use_parent: bool = False):
     for std_name, source, variants in _KEY_TOTALS:
         # 总是用精确提取覆盖: B0 可能把"负债合计"子串误匹配到"流动负债合计"行导致值错，
         # 科目列精确匹配(candidates)是确定性的，优先于 LLM 映射。
+        # 但"覆盖"只能覆盖**值**, 不能覆盖**期间** —— 取哪一列得按表头语义来。
+        table_guide = _table_guide_for(guide, source, use_parent)
         for row in rows_map[source]:
             col0 = str(row.columns.get("col_0", "")).strip()
             if col0 not in variants:
                 continue
-            # 取数值列: 优先 col_2（本期/期末），否则找第一个非附注数值列
-            val_str = None
-            for key in ("col_2", "col_3", "col_1"):
-                v = row.columns.get(key, "")
-                if v and not _is_note_ref(v):
-                    val_str = v
-                    break
-            if not val_str:
-                val_str = _find_numeric_column(row.columns)
+            val_str = _current_period_cell(row.columns, table_guide)
             value = _parse_number(val_str) if val_str else None
             if value is not None:
                 target_map[source][std_name] = FinancialField(

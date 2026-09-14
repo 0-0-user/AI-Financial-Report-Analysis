@@ -23,12 +23,16 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from schemas.tags import strip_level_suffix
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 # ── 路径 ──
 ROOT = Path(__file__).parent.parent
-INDUSTRY_CSV = ROOT / "data/industry/thf_industry_classification.csv"
+INDUSTRY_CSV = ROOT / "data/industry/sw_industry_classification.csv"
 OUTPUT_PATH = ROOT / "config/industry_quantiles.yaml"
 
 # ── 6 维指标 + akshare 列名映射 ──
@@ -51,7 +55,12 @@ SIZE_BINS = {"小型": (0, 5e8), "中型": (5e8, 4e9), "大型": (4e9, float("in
 
 
 def load_industry_csv() -> dict[str, list[str]]:
-    """加载同花顺行业分类 -> {三级行业名: [stock_codes]}"""
+    """加载申万行业分类 -> {三级行业名: [stock_codes]}
+
+    三级名带罗马数字后缀 (中药Ⅲ), 生成配置前剥掉 —— B+ 查阈值表时用的
+    也是剥过后缀的名字 [schemas.tags.strip_level_suffix], 两边必须一致,
+    否则生成的基准键永远命中不上。
+    """
     if not INDUSTRY_CSV.exists():
         logger.error(f"行业分类 CSV 不存在: {INDUSTRY_CSV}")
         sys.exit(1)
@@ -62,7 +71,7 @@ def load_industry_csv() -> dict[str, list[str]]:
     industry_map: dict[str, list[str]] = defaultdict(list)
     for row in csv.DictReader(io.StringIO(text)):
         code = row["股票代码"].strip().split(".")[0]
-        level3 = row["所属同花顺三级行业"].strip()
+        level3 = strip_level_suffix(row["所属申万三级行业"].strip())
         if code and level3:
             industry_map[level3].append(code)
 
@@ -267,7 +276,7 @@ def generate_config(
         "# ==========================================================",
         "#",
         f"# 自动生成于: akshare 全 A 股财务数据",
-        f"# 行业分类: 同花顺三级行业 (5536 只)",
+        f"# 行业分类: 申万三级行业 (data/industry/sw_industry_classification.csv)",
         f"# 覆盖行业: {len(industry_quantiles) - 2} 个",
         f"# 指标维度: {', '.join(DIMENSIONS)}",
         "#",

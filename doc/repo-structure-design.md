@@ -170,9 +170,9 @@ weights:
 
 ```yaml
 hard_tags:
-  - name: "同花顺三级行业"
-    description: "同花顺行业分类标准，精确到三级"
-    source: "同花顺 iFinD"
+  - name: "申万三级行业"
+    description: "申银万国行业分类标准，精确到三级"
+    source: "cninfo 申银万国行业分类标准"
     # 具体值通过 A1 LLM 动态生成，不在配置文件预定义
 
 soft_tags:
@@ -400,7 +400,7 @@ from pydantic import BaseModel
 
 class HardTag(BaseModel):
     """硬标签：行业分类"""
-    system: str             # 分类体系：同花顺三级行业
+    system: str             # 分类体系：申万三级行业
     value: str              # 具体值：白酒
 
 class SoftTag(BaseModel):

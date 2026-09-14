@@ -18,7 +18,7 @@ import logging
 from typing import Optional
 
 from schemas.financial import FinancialStatement
-from schemas.benchmark import Benchmark
+from schemas.benchmark import Benchmark, MIN_PEER_SAMPLE
 from schemas.anomaly import DeviationAnomaly
 
 logger = logging.getLogger(__name__)
@@ -98,13 +98,18 @@ def calc_deviation_multiple(
     actual_value: float,
     peer_values: list[float],
     method: str = "auto",
-) -> tuple[float, float, float, str]:
+) -> tuple[float, float, Optional[float], str]:
     """计算偏离度: |actual - median| / robust_scale
 
     Returns: (peer_median, robust_scale, deviation_multiple, method_used)
+
+    deviation_multiple 为 None 表示【无法判定】，而不是"偏离无穷大"。
+    scale == 0 时旧的写法返回 inf，下游 min(inf/3, 5.0) 直接顶格，
+    把"没法判断"渲染成"最严重的异常"。除非实际值恰好等于中位数
+    （那确实是 0 偏离），否则这里只报"测不出来"。
     """
     if not peer_values:
-        return 0.0, 0.0, float("inf"), "none"
+        return 0.0, 0.0, None, "none"
 
     arr = np.array(peer_values, dtype=float)
     peer_median = float(np.median(arr))
@@ -117,7 +122,11 @@ def calc_deviation_multiple(
         scale = calc_mad(peer_values); m = "MAD"
 
     if scale == 0:
-        return peer_median, 0.0, float("inf"), m
+        # 同行值全同 -> robust scale 为 0。实际值和中位数一致时偏离就是 0，
+        # 是能判的；不一致时没有任何尺度可用来衡量这个差异，判不了。
+        if actual_value == peer_median:
+            return peer_median, 0.0, 0.0, m
+        return peer_median, 0.0, None, m
 
     mult = abs(actual_value - peer_median) / scale
     return peer_median, scale, float(mult), m
@@ -302,8 +311,24 @@ def run_deviation_analysis(
         if not peer_values:
             continue
 
+        # 样本门槛: 同行太少时 robust scale 的估计方差过大，"偏离 N 倍"
+        # 这个说法本身就不成立，不予判定（而不是给个看起来很确定的数）。
+        if len(peer_values) < MIN_PEER_SAMPLE:
+            logger.warning(
+                f"  {indicator}: 有效同行仅 {len(peer_values)} 家 "
+                f"(< {MIN_PEER_SAMPLE})，不足以判定偏离，跳过"
+            )
+            continue
+
         # 自适应 robust scale
         median, scale, multiple, method = calc_deviation_multiple(actual, peer_values)
+
+        # 无法判定（robust scale 退化为 0 且实际值不等于中位数）: 跳过
+        if multiple is None:
+            logger.warning(
+                f"  {indicator}: 同行稳健尺度为 0（同行值全同），无法判定偏离，跳过"
+            )
+            continue
 
         # 小样本 Bootstrap 修正
         if n_peers < 15 and multiple > mad_threshold:

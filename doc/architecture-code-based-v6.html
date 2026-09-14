@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>AI 财报智能分析系统架构 v6（代码核对版）</title>
+<style>
+  :root{
+    --ink:#1a2233; --sub:#4a5568; --line:#d8dee9; --bg:#f6f8fb;
+    --accent:#0f62fe; --accent2:#6e3b9b; --ok:#0e7a3d; --warn:#b45309; --bad:#b91c1c;
+    --th:#eef3fb;
+  }
+  *{box-sizing:border-box}
+  body{font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;color:var(--ink);line-height:1.65;font-size:13.5px;margin:0;background:#fff}
+  .page{max-width:1040px;margin:0 auto;padding:34px 44px 90px}
+  h1{font-size:26px;line-height:1.3;margin:6px 0 4px}
+  h2{font-size:20px;border-bottom:2px solid var(--accent);padding-bottom:6px;margin:42px 0 14px;color:var(--accent)}
+  h3{font-size:16px;margin:28px 0 10px;color:#243b66}
+  h4{font-size:14.5px;margin:20px 0 8px;color:#334}
+  p{margin:8px 0}
+  code{background:#eef1f6;border:1px solid #e0e5ee;border-radius:4px;padding:1px 5px;font-family:Consolas,"Courier New",monospace;font-size:12px;color:#0b2a56}
+  pre{background:#0f172a;color:#e2e8f0;padding:12px 16px;border-radius:8px;overflow-x:auto;font-size:12px;line-height:1.5}
+  pre code{background:none;border:none;color:inherit;padding:0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--th);font-weight:700}
+  tr:nth-child(even) td{background:#fafcff}
+  .meta{color:var(--sub);font-size:12.5px;margin-bottom:6px}
+  .box{border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--bg);padding:12px 16px;border-radius:6px;margin:14px 0}
+  .warn{border-left-color:var(--warn)}
+  .ok{border-left-color:var(--ok)}
+  .flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:14px 0;font-size:13px}
+  .flow .st{background:var(--accent);color:#fff;border-radius:6px;padding:6px 10px;font-weight:600;white-space:nowrap}
+  .flow .st.g{background:#5b6e91}.flow .st.o{background:var(--warn)}.flow .st.p{background:#6e3b9b}.flow .st.c{background:#7d3c3c}
+  .flow .arr{color:#8a94a6;font-weight:700}
+  .kbd{font-family:Consolas,monospace;background:#eee;border:1px solid #ccc;border-radius:3px;padding:0 4px;font-size:12px}
+  .toc{columns:2;column-gap:30px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:14px 18px}
+  .toc a{color:var(--accent);text-decoration:none;display:block;font-size:13px;line-height:1.9}
+  .foot{color:var(--sub);font-size:11.5px;border-top:1px solid var(--line);margin-top:40px;padding-top:10px}
+  .legend span{display:inline-block;margin-right:14px;font-size:12px}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+  @media print{
+    body{font-size:11pt}
+    h2{break-after:avoid} h3,h4{break-after:avoid}
+    table{break-inside:auto} tr{break-inside:avoid}
+    .page{padding:8mm 6mm}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>AI 上市公司财报智能分析系统 — 架构文档</h1>
+<p class="meta">v6 · 代码核对版（逐字核对于源码与 config，关键结论标注 <code>文件:行号</code>）｜ 生成于 2026-09-06 ｜ 对应仓库分支 <code>dev</code>（HEAD 7e4ebea）</p>
+<p class="meta">真项目路径：<code>C:\Users\25338\Documents\GitHub\AI-Financial-Report-Main</code>（本文件位于 <code>doc\</code>）</p>
+
+<div class="box ok">
+<b>一句话定位：</b>把一份几百页的上市公司年报 PDF，通过 <b>LLM（语义）+ 代码（数学）严格分工</b> 的 9 层流水线，加工成<b>带置信度打分与证据溯源的结构化分析报告</b>（JSON + Markdown，可选 Web 端 SSE 实时查看）。
+</div>
+
+<div class="toc">
+<a href="#s0">0. 阅读须知与文档口径</a>
+<a href="#s1">1. 核心设计原则</a>
+<a href="#s2">2. 总体架构与执行编排</a>
+<a href="#s3">3. 数据契约（schemas）主线</a>
+<a href="#s4">4. 各层详解与阈值</a>
+<a href="#s5">5. LLM 网关（llm/）</a>
+<a href="#s6">6. Prompt 模板清单</a>
+<a href="#s7">7. 配置体系总表</a>
+<a href="#s8">8. 关键阈值速查总表</a>
+<a href="#s9">9. 行业阈值机制详解</a>
+<a href="#s10">10. 评分与证据理论数学</a>
+<a href="#s11">11. 辅助工具 / Web / 数据构建</a>
+<a href="#s12">12. 已知不一致与实现注意点（以代码为准）</a>
+</div>
+
+<h2 id="s0">0. 阅读须知与文档口径</h2>
+<div class="box warn">
+<b>口径声明：</b>本文档按<b>代码事实</b>编写。凡是与仓库 <code>README.md</code> / <code>doc/architecture-v5.1.md</code> 的"设计意图"不一致之处，均在第 12 章以"注意点"列明，正文按代码实际行为描述。<br>
+全项目 Python 约 <b>13.7 千行</b>（不含数据/tests/web 静态资源）；各层实现在 <code>layers/</code>，编排在 <code>pipeline/</code>，数据契约在 <code>schemas/</code>。
+</div>
+
+<h2 id="s1">1. 核心设计原则</h2>
+<p>系统最核心的约束是<b>隔离数值幻觉</b>：大模型只做语义理解，代码负责一切确定性数学。</p>
+<table>
+<tr><th>大模型做的事</th><th>代码做的事</th></tr>
+<tr><td>理解年报原文、表格表头归类、附注定位</td><td>提取数字、单位换算（元/万元/亿元）</td></tr>
+<tr><td>行业定性标签的兜底补充</td><td>标签查表（申万 CSV）、同行匹配（余弦）</td></tr>
+<tr><td>逻辑推演：异常原因路1查原文 / 路2外部假设</td><td>勾稽校验（会计恒等式）、MAD 偏差、B+ 逻辑检查</td></tr>
+<tr><td>语义合并、冲突标注、语义三档映射</td><td>D-S 证据理论 mass/合成/概率、E1 置信度打分</td></tr>
+</table>
+<p>含义：<b>任何一处"数学"都不会交给 LLM</b>；反之规则无法覆盖的语义判断不写死规则，交给 LLM。</p>
+
+<h2 id="s2">2. 总体架构与执行编排</h2>
+<h3>2.1 流水线步骤（实际注册 8 步）</h3>
+<div class="flow">
+<span class="st">L0 提取</span><span class="arr">→</span>
+<span class="st g">A1/A2 行业定性+同行</span><span class="arr">→</span>
+<span class="st">B0/B1 财务提取+勾稽</span><span class="arr">→</span>
+<span class="st o">A0 宏观(在B后)</span><span class="arr">→</span>
+<span class="st">B+ 内部逻辑检查</span><span class="arr">→</span>
+<span class="st c">C MAD偏差</span><span class="arr">→</span>
+<span class="st p">D 推理(D1→D2→D3)</span><span class="arr">→</span>
+<span class="st">E 报告(E1→E2)</span>
+</div>
+<div class="legend"><span><i style="background:#5b6e91"></i>A层(CSV/akshare纯代码)</span><span><i style="background:#b45309"></i>A0(LLM+SerpAPI)</span><span><i style="background:#6e3b9b"></i>D(混合)</span><span><i style="background:#7d3c3c"></i>C(纯代码)</span></div>
+<p>注：<code>layer_amacro</code>（A0 宏观）依赖 <code>financials</code>，故排在 B 层<b>之后</b>执行；README 的"七层"描述未把 A0 单列（见 §12）。</p>
+<table>
+<tr><th>步骤</th><th>注册 requires（缺失即终止）</th><th>写出到 ctx</th><th>失败语义</th></tr>
+<tr><td>layer_0</td><td><code>_pdf_path</code></td><td><code>raw_doc</code></td><td>MinerU→pdfplumber 降级；LLM 表分类有规则降级</td></tr>
+<tr><td>layer_a</td><td><code>raw_doc</code></td><td><code>tags</code>、<code>benchmark</code>、<code>multi_year_financials</code>、<code>multi_year_company_names</code></td><td>A1 查不到标签→空标签；A2 数据不足→空 benchmark</td></tr>
+<tr><td>layer_b</td><td><code>raw_doc</code></td><td><code>financials</code>、<code>parent_financials</code>、<code>validation_passed</code></td><td>勾稽失败→写 errors<b>终止流水线</b>（阻断）</td></tr>
+<tr><td>layer_amacro</td><td><code>raw_doc</code>,<code>tags</code>,<code>financials</code></td><td><code>macro_facts</code></td><td>失败→降级空列表（优雅）</td></tr>
+<tr><td>layer_bplus</td><td><code>validation_passed</code>,<code>financials</code>,<code>tags</code></td><td><code>logic_anomalies</code>、<code>warnings</code></td><td><code>validation_passed=False</code>→整体跳过只记 warning</td></tr>
+<tr><td>layer_c</td><td><code>financials</code>,<code>benchmark</code></td><td><code>deviations</code></td><td>—</td></tr>
+<tr><td>layer_d</td><td><code>raw_doc</code>,<code>macro_facts</code>,<code>tags</code>,<code>logic_anomalies</code>,<code>deviations</code></td><td><code>reasoning_results</code></td><td>D1→空结构 / D2→<code>{"信息不足":1.0}</code> / D3→跳过（分级降级）</td></tr>
+<tr><td>layer_e</td><td><code>reasoning_results</code>,<code>deviations</code>,<code>logic_anomalies</code>,<code>tags</code>,<code>financials</code>,<code>benchmark</code></td><td><code>score</code>、<code>report</code></td><td>图表异常→空列表（非阻断）</td></tr>
+</table>
+<p><b>编排器（Orchestrator，pipeline/orchestrator.py）：</b>严格按序执行，<b>不允许跳过、失败即终止</b>；支持 <code>start_from</code>（从某层起跑，供调试）；层间检查 <code>controls.cancel / pause</code>（每层间检查点，暂停轮询 0.2s）。任一层异常或被 <code>registry.check_requirements</code> 发现缺字段 → 记入 <code>ctx.errors</code> 并中断；最终输出<b>错误报告</b>（<code>score=0 / 低置信度</code>，orchestrator.py:135-148）。</p>
+
+<h3>2.2 运行入口与产物</h3>
+<ul>
+<li>CLI：<code>python scripts/run_pipeline.py --pdf data/raw/600519_2024.pdf [--output DIR] [--from layer_c]</code>（仅这三个参数，README 所述 <code>--no-llm</code> 不存在，见 §12）。</li>
+<li>产物：<code>data/outputs/{stem}_report.json</code>（Pydantic 序列化）+ <code>data/outputs/{stem}_report.md</code> + 图表 <code>data/outputs/charts/*.png</code>。</li>
+<li>运行流水账（tracer）：<code>data/logs/{stem}_trace.jsonl</code>（事件流实时追加）+ <code>{stem}_trace.md</code> + <code>{stem}.log</code>；事件含 milestone / llm_start / llm_token / llm_done / llm_fail，均带 <code>seq</code>+<code>ts</code>；单次只允许一个 active LLM 调用（并发即记失败）；llm_token 文本全量落盘不截断，其余 preview 截 <code>_PREVIEW_LIMIT=500</code>。</li>
+</ul>
+
+<h2 id="s3">3. 数据契约（schemas/，Pydantic v2）</h2>
+<table>
+<tr><th>Schema</th><th>关键字段/结构</th></tr>
+<tr><td><code>RawDocument</code></td><td><code>metadata / financial_data / management_discussion / footnotes / company_overview</code>；<code>FinancialTable</code> 六个桶：<code>balance_sheet, income_statement, cashflow_statement</code> 及母公司 <code>parent_balance_sheet, parent_income_statement, parent_cashflow_statement</code>（母子彻底分桶）</td></tr>
+<tr><td><code>CompanyTags</code></td><td><code>company_name / stock_code / hard_tags[] / financial_profile</code>；<code>FINANCIAL_DIMENSIONS</code> 固定 6 维（见 §4.2 的语义错位注意）</td></tr>
+<tr><td><code>B0Guide / TableGuide</code></td><td><code>tables[]→{table_name, report_type(合并/母公司), overall_unit, columns[], field_mappings[], layout(row_major/column_major)}</code>；<code>FieldMapping{raw_name, standard_name, row_index, col_index, unit, is_negative}</code></td></tr>
+<tr><td><code>FinancialStatement</code></td><td>合并/母公司各一：<code>balance_sheet/income_statement/cashflow: dict[str, FinancialField]</code>；<code>FinancialField{standard_name, raw_name, value(已统一换算元), original_unit, report_type}</code>；<code>validation</code> 为占位真值（真实校验存 <code>ctx.validation_passed</code>，见 §12）</td></tr>
+<tr><td><code>Benchmark</code></td><td><code>industry / peer_median(dict, 东财列名为键) / historical_mean(恒空{} / peer_companies[]</code>；<code>PeerCompany{name, stock_code, similarity_score(财务余弦), financials}</code></td></tr>
+<tr><td><code>LogicAnomaly</code></td><td><code>check_name / value / threshold / severity(float) / summary / detail</code>（B+ 产出）</td></tr>
+<tr><td><code>DeviationAnomaly</code></td><td><code>indicator(中文) / actual_value / benchmark_value(同行中位) / mad_multiple / severity("normal"|"abnormal"|"extreme")</code>（C 产出）</td></tr>
+<tr><td><code>ProbabilityAssignment</code></td><td><code>anomaly_indicator / anomaly_source("B+"|"C") / lookups / hypotheses / probabilities(Σ=1) / ds_metadata{m1,m2,mass_final,conflict_K,severe_conflict,merged_causes,merge_failed} / semantic_scores(-3..+2) / semantic_keywords</code>（D 产出）</td></tr>
+<tr><td><code>Report</code></td><td>六模块：0 宏观折线图 8 张；1 综合评级+信任区间 [Bel,Pl]；2+3 核心异常与概率归因；4 LLM 总结；5 证据溯源 footnote；另含 <code>ScoreBreakdown / TrustInterval / bull_points / bear_points</code></td></tr>
+</table>
+
+<h2 id="s4">4. 各层详解与阈值</h2>
+
+<h3>4.1 L0 — PDF 提取（layer_0_extract）</h3>
+<p><b>分工：</b>MinerU（<b>免费版单次 ≤200 页</b>）优先 → pdfplumber 降级 → OCR 纠错 → 规则切四大区块 → 产出 <code>RawDocument</code>。含一次 LLM（表格分类），并非纯工具层。</p>
+<h4>4.1.1 TOC 拆分（>200 页时，toc_splitter.py）</h4>
+<table>
+<tr><th>常量</th><th>值</th><th>含义</th></tr>
+<tr><td><code>max_pages</code></td><td>200</td><td>MinerU 单次上限；≤200 不拆</td></tr>
+<tr><td><code>TOC_SEARCH_PAGES</code></td><td>15</td><td>目录只在前 15 页内找</td></tr>
+<tr><td>前 4 页(0–3)</td><td>无条件解析</td><td>之后页面须含"节章部篇/一、二、…"关键词才解析</td></tr>
+<tr><td>页码合法性</td><td>[1,500]</td><td>目录条目页码越界丢弃</td></tr>
+<tr><td>章节名</td><td>≥3 字且 ≠当前物理页</td><td>否则丢弃</td></tr>
+<tr><td>拆分点下限</td><td>≥5</td><td>跳过封面/首页</td></tr>
+<tr><td>兜底</td><td>按 200 硬拆</td><td>找不到合适章节时</td></tr>
+</table>
+<p><b>文件命名隐患：</b>拆分名 <code>{stem}-1.pdf/-2.pdf</code> 与 <code>mineru_client.batch_extract</code> 推断分块起始页的正则 <code>p(\d+)-\d+\.pdf$</code> 永不匹配 → 实际恒走 <code>page_offset+1</code> 分支（恰好可用，属隐式约定）。</p>
+<h4>4.1.2 Chunker 四大区块（chunker.py）</h4>
+<table>
+<tr><th>场景</th><th>规则/阈值</th></tr>
+<tr><td>TOC 忽略</td><td>物理页 ≤ <code>_TOC_PAGE_LIMIT=10</code> 的章节匹配一律忽略（目录/审计引言段）</td></tr>
+<tr><td>降级切分假设</td><td>财报≈前 1/6 起覆盖 80 页；管理层讨论≈中点+40 页；附注≈后 1/3；公司简介≈首页+10 页</td></tr>
+<tr><td>季报判定</td><td>列数 ≤3 且含"3月31日/第一季度"（无附注列的窄表）</td></tr>
+<tr><td>附注抽取</td><td>每页最多 3 条，名称≤30 字（<3 字丢弃为误匹配），正文截 2000 字符</td></tr>
+<tr><td>业务描述</td><td>overview 区间全文前 3000 字符</td></tr>
+<tr><td>核心表粗筛</td><td>有日期列（命中 <code>12月31日/年度/3月31日/6月30日/9月30日/第一季度/上半年/前三季度</code>）∧（有"附注"列 ∨ 季报）——注释称 216 张表实测 0 误报 0 漏报</td></tr>
+<tr><td>跨页表合并</td><td>相邻页(页码差 1) ∧ 列数相等 ∧ ≥3 列；延续页表头须"含 项目/附注/科目 且无数字"（<code>_looks_like_header_row</code>）</td></tr>
+<tr><td>规则降级分类关键词</td><td>BS: 资产/负债/所有者权益；PL: 收入/利润/成本/费用；CF: 现金/投资活动/筹资活动（看前 12 行）</td></tr>
+</table>
+<h4>4.1.3 LLM 表格分类（唯一显式 temperature=0.0 的调用）</h4>
+<table>
+<tr><th>参数</th><th>值</th></tr>
+<tr><td>输入</td><td>每张候选表<b>表头前 2 行</b>文本，截断 300 字符；<b>数值单元格不进 prompt</b></td></tr>
+<tr><td>批大小 <code>BATCH_SIZE</code></td><td>40 张表/批（防思考链耗尽输出预算——历史 GLM/DeepSeek 踩坑）</td></tr>
+<tr><td>prompt</td><td><code>config/prompts/b0_table_localization.yaml</code>（命名带 b0 但归属 L0）</td></tr>
+<tr><td>温度</td><td>0.0</td></tr>
+<tr><td>漏表补全</td><td>重试 ≤2 次仍漏 → <code>RuntimeError</code> 终止（LLM 缺表即终止的唯一降级是整批 catch 后 <code>_rule_based_classify</code>）</td></tr>
+<tr><td>报表范围</td><td>标题含"母公司"→ parent，否则 consolidated；股东权益变动表归 balance_sheet；附注表→other；LLM 缺失 scope 默认 consolidated；core 报表只认 balance_sheet/income_statement/cashflow 三种</td></tr>
+</table>
+<h4>4.1.4 OCR 纠错（text_corrector.py）</h4>
+<p>字典 + 单次编译正则（长匹配优先）：修复"资釐→资金、负偾→负债、收亼→收入、税釐→税金、应攵→应收、借欯→借款、现釐→现金"等形近字，以及数字混淆 <code>OO→00, o0→00, l,→1,, S,→5,, T,→7,</code>；<code>[–—](\d) → -\1</code> 归一全角负号。</p>
+<div class="box warn"><b>高风险点：</b>存在<b>单字无上下文全局替换</b> <code>巳/己→已</code>、<code>末→未</code>、<code>午→年</code>、<code>曰→日</code>，会误伤正常词（"自己"→"自已"、"年末"→"年未"、"下午"→"下年"）。作用于切分前整篇文本与所有单元格。</div>
+<p><b>环境耦合：</b><code>mineru_client.py:21</code> 硬编码 <code>C:\Users\xu\.mineru\bin\mineru-open-api.exe</code>（其它机器不存在 → 必然抛 FileNotFoundError → 自动降级 pdfplumber）。鉴权仅用 <code>MINERU_TOKEN</code>。</p>
+<h4>4.1.5 页码口径不一致（注意）</h4>
+<p>MinerU 单块路径用 <code>page_idx</code>（0 基）；分块路径经 batch_extract +1 归一 1 基；pdfplumber 恒 1 基。chunker 的"≤10 页忽略"在 0/1 基下跳过页数会差一页。</p>
+
+<h3>4.2 A 层 — 行业定性 + 同行基准（layer_a_benchmark / layer_amacro）</h3>
+<h4>A1 行业标签（a1_tagging.py）— 纯代码 CSV 查表，无 LLM</h4>
+<ul>
+<li>数据源：<code>data/industry/sw_industry_classification.csv</code>（申万行业分类，脚本 <code>scripts/build_industry_csv.py</code> 从 cninfo 申银万国分类树拉取）；必需列 <code>股票代码/股票简称/所属申万一/二/三级行业</code>。</li>
+<li>匹配：股票代码精确 → 失败按公司名<b>双向子串包含</b>模糊匹配 → 仍失败返回空硬标签（不降级）；行数 &lt;5000 告警。</li>
+<li>产出标签：三级（system="申万三级行业"）/二级/一级，缺的级别不发标签。</li>
+</ul>
+<h4>A2 同行匹配（a2_matcher.py）— 纯代码 akshare + 余弦，无 LLM</h4>
+<p><b>流程：</b>取<b>二级</b>行业作同行池（必要时用三级反查二级）→ 并发拉目标+全部同行 akshare → 全样本稳健统计量 → 逐行稳健标准化 <code>(x−median)/IQR</code>（IQR 下限 1e-10 防除零）→ 逐维取中位数得 6 维向量 → 余弦相似度排序 → 产出 Benchmark。</p>
+<table>
+<tr><th>常量</th><th>值</th></tr>
+<tr><td><code>_PEER_COUNT_MIN</code></td><td>5 家（MAD 基准池下限）</td></tr>
+<tr><td><code>_TOP_PERCENT</code></td><td>0.2 → MAD 池 = max(ceil(20%×N), 5)；同行 &lt;10 家退化为 Top5</td></tr>
+<tr><td>展示 Top</td><td>余弦 Top5（供 E 层"同行对比"）</td></tr>
+<tr><td>取数范围</td><td>仅年报（report_type 含"年"），只保留最近 <code>MAX_YEARS=5</code> 年</td></tr>
+<tr><td>网络</td><td>akshare 单请求超时 25s；<code>ThreadPoolExecutor(max_workers=6)</code> 并发</td></tr>
+<tr><td>后缀</td><td>6→.SH；0/3→.SZ；4→.BJ</td></tr>
+<tr><td>精度</td><td>相似度/同行中位数 round 4 位</td></tr>
+<tr><td>相似度判定</td><td><b>只有相对排序，无绝对阈值</b>；余弦=0 仅当任一方零范数</td></tr>
+</table>
+<div class="box warn"><b>语义错位（重点，写文档必提）：</b>名义 6 维含"研发费用率/销售费用率"，实际东财列映射为 <code>YYZSRGDHBZC</code>（注释自述"替代：营业收入同比增长率"）与 <code>ROEJQ</code>（"替代：净资产收益率-加权"）。真实 6 维 = <b>毛利率、净利率、总资产周转率、资产负债率、营收同比增速、加权 ROE</b>。字段名语义 ≠ 取数语义，是旧字段名+新取数遗留。<code>PeerCompany.similarity_score</code> 注释"软标签相似度"实为财务向量余弦。</div>
+<p>注意：<code>peer_median</code> 与 <code>PeerCompany.financials</code> 均以<b>东财列名</b>为键；<code>financials</code> 只取各同行<b>最新一年</b>原始值（C 层"同行中位"基于最新年报，非 5 年中位）。<code>historical_mean</code> 恒空（{ }）。</p>
+<h4>A0 宏观检索（a0_macro_search.py + layer_amacro）— LLM + SerpAPI</h4>
+<table>
+<tr><th>项</th><th>值/说明</th></tr>
+<tr><td>维度</td><td>固定 4 键：维度1_宏观周期 / 2_上游原材料 / 3_下游需求 / 4_外部突变</td></tr>
+<tr><td>搜索上限</td><td>最多 12 条；每条取 top3；<code>hl=zh-cn</code>，engine=google；单请求 30s</td></tr>
+<tr><td>结果截断</td><td>拼接后 8000 字符</td></tr>
+<tr><td>prompt</td><td><code>a0_search_query</code>（生成搜索词，每维 ≥3 词须含"今年"）→ <code>a0_macro_facts</code>（提取事实，须带来源/日期）</td></tr>
+<tr><td>降级</td><td>无 <code>SERPAPI_KEY</code>/无结果 → 让 LLM"基于行业知识"输出；搜索词生成失败抛错 → 被 layer_amacro 捕获降级为 <code>macro_facts=[]</code></td></tr>
+<tr><td>输出格式</td><td><code>[1_宏观周期] 事实 (来源, 日期)</code></td></tr>
+</table>
+
+<h3>4.3 B 层 — 财务数据提取（layer_b_extract）</h3>
+<p>顺序：B0 表头语义指引 → B1 数值提取 → 勾稽校验。合并与母公司报表<b>彻底分桶、分别产出</b> TableGuide / FinancialStatement。</p>
+<h4>4.3.1 B0 表头语义指引（b0_semantic_guide.py）</h4>
+<p>对每张报表做：布局检测 → 多级表头解析 → 字段映射。LLM 优先（<code>client.chat("b0_semantic_guide", temperature=0.0, max_tokens=16384)</code>，读<b>表头与科目名、不读数值单元格</b>，输入字段采样上限 100——注释与代码(50 vs 100)不符）；失败降级 <code>_rule_based_guide</code>（用 financial_fields.yaml 变体索引：col_0 全字优先 + 子串兜底）。</p>
+<table>
+<tr><th>规则</th><th>值</th></tr>
+<tr><td>布局判定</td><td>前 5 行最大列数 ≥3 → row_major（docstring 写 ≥6 与实际 3 不符）；否则 column_major</td></tr>
+<tr><td>表头解析行数</td><td>前 ≤10 行；找不到表头默认前 3 行</td></tr>
+<tr><td>列名别名表</td><td>期末余额/期末数/年末余额→end_balance；期初→begin_balance；本期发生额/金额→current_amount；上期/上年同期→prior_amount；金额→amount；占比→percentage；End Balance 等英文同义</td></tr>
+<tr><td>单位正则顺序</td><td>万元|万 → 千元 → 亿元 → 百万元 → 元/RMB/CNY（<b>注意"万亿"会先命中"万"</b>，顺序敏感）</td></tr>
+<tr><td>report_type</td><td>由"桶"归属强制决定（合并/母公司），<code>_detect_report_type</code> 结果被覆盖，属冗余</td></tr>
+<tr><td>数值列兜底</td><td>找不到数值列默认第 1、2 列；默认单位"元"</td></tr>
+</table>
+<h4>4.3.2 B1 数值提取（b1_extractors.py）— 纯代码</h4>
+<ul>
+<li>入口按 <code>table_guide.report_type</code> 选合并/母公司桶；行式走 <code>_extract_row_major</code>，列式走 <code>_extract_column_major</code>。</li>
+<li>行命中多值取<b>绝对值更大</b>者（合并&gt;母公司&gt;附注小表）；子串误匹配规避：含"归属于母/少数股东"的行跳过；<code>^[一二三四五六七八九十]+[、.，,]\s*\d+$</code> 视为附注引用"七、1"不取数。</li>
+<li>金额精度 <code>_MONEY_QUANTIZE=0.01</code>（2 位小数 ROUND_HALF_UP）；百分比串 ÷100；<b>超 1e15 判解析错误返回 None</b>。</li>
+<li>单位→倍数表：元=1 / 千元=1000 / 万元=1e4 / 百万元=1e6 / 亿元=1e8；未知单位回退 1。</li>
+<li><code>_cross_validate_and_fix</code>：合并/母公司资产负债表恒等式<b>三缺一推算</b>（缺一项由另两项反推）。</li>
+<li><b>交叉验证偏差分级：</b>&gt;5%（0.05）记异常（疑单位换算错）；1%–5%（0.01）仅 info 提示。</li>
+<li><b>8 个关键合计字段</b>（<code>_KEY_TOTALS</code>）：资产总计、负债合计、所有者权益合计、货币资金、存货、营业收入、净利润、经营活动现金流量净额——用"科目列 col_0 全等匹配 + 固定列优先级 <code>(col_2, col_3, col_1)</code>"（假定 col_2=本期/期末）确定性提取，<b>总是覆盖 LLM/补充结果</b>，规避"负债合计误中流动负债合计"类子串问题。</li>
+<li>负值合理性白名单：Total_Assets / Monetary_Funds / Inventory 为负记异常。</li>
+</ul>
+<h4>4.3.3 勾稽校验（b1_validators.py）— 纯数学</h4>
+<table>
+<tr><th>恒等式</th><th>规则</th><th>性质</th></tr>
+<tr><td>资产 = 负债 + 权益</td><td><code>TOLERANCE=0.01</code>（相对偏差 &lt;1% 通过）；任一字段缺失→<b>直接判失败</b>（强制项）</td><td><b>强制</b></td></tr>
+<tr><td>期末未分配利润 ≈ 期初+净利润−分红</td><td>同 1% 容差；缺期初/净利任一→<b>自动通过</b>（软项）；分红取资产负债表 <code>Dividends_Payable</code>（代码变量名 cashflow_dividends 易误导）</td><td><b>软项</b></td></tr>
+</table>
+<p><b>阻断语义：</b>任一恒等式失败 → <code>is_valid=False</code>，错误文案"PDF 数据源可能损坏或造假"。orchestrator 因 errors 终止整条流水线，B+ 因门禁也自跳（README 的阻断机制与代码一致，只是真正写 errors 的是 B1）。</p>
+
+<h3>4.4 B+ 层 — 内部逻辑检查（layer_bplus_internal）</h3>
+<p><b>只代码、无 LLM。</b>门禁：<code>validation_passed=False</code> → 整体跳过。流程：取三级行业 → <code>_detect_soe</code> 判国企/民企 → <code>run_all_checks</code>（①净现比/收现比 ②存贷双高 ③母子资金分离 ④销售增长vs现金流背离 ⑤过度投资）→ <code>run_extended_checks</code>（fraud_patterns，7 项 + Beneish M-Score）→ <code>run_internal_control_check</code>（内控四项，关键词 guess）→ 按白名单分 data/behavior → <code>calc_risk_level</code>。</p>
+<p>行业阈值加载：<code>config/industry_thresholds.yaml</code>（相对 CWD 加载，非 __file__ 锚定；<code>config/thresholds.yaml</code> 对 B+ 属死加载）。判定规则见 §9 与下表。</p>
+<table>
+<tr><th>检查</th><th>判定规则（关键阈值）</th><th>严重度 severity</th></tr>
+<tr><td>①净现比/收现比（利润含金量）</td><td>两者同时 &lt;行业 p75（净现比默认 0.85 / 收现比 0.95），<b>或</b>两者同时 &lt;<b>0.6</b>（经验双条件）</td><td>极严重（净现比 &lt;p25 或 &lt;0）→ <b>5.0</b>；否则 <b>2.5</b></td></tr>
+<tr><td>②存贷双高（资金结构）</td><td>货币资金/总资产 <b>且</b> 有息负债/总资产 同时 &gt;同规模 p75（默认 0.30 / 0.42）；严重度 ∝ 乘积 p=cash×debt 分段插值</td><td>p&gt;0.30→5.0；p&gt;0.10→2.0+(p−0.10)/0.20×3；else max(0.5, p/0.10×2)</td></tr>
+<tr><td>③母子资金分离（资金管控）</td><td>|合并货币资金−母公司货币资金|/总资产 &gt; 行业 <b>mean + 2σ</b>（默认 0.10+2×0.06）；仅 parent 存在时执行</td><td>&gt;1.5×阈→5.0；&gt;1.25×阈→3.0；else 2.0</td></tr>
+<tr><td>④销售增长 vs 现金流背离</td><td>营收增长&gt;<b>15%</b> 且 经营现金流/总负债 &lt;<b>−0.05</b>（依赖上年营收，单期数据不触发）</td><td>min(5.0, |cf_ratio|×10+(growth−0.15)×5)</td></tr>
+<tr><td>⑤过度投资</td><td>增长&gt;10% 且现金流下降。国企→风险 3.5；民企→ 应收/总资产&gt;<b>0.3</b>(记应收高企) 或 净利率&lt;<b>0.05</b>(利润率低) 默认 2.5；未定性质→2.0</td><td>分情形 3.5 / 2.5 / 2.0</td></tr>
+</table>
+<p><b>内控四项（关键词 guess，非真实审计）：</b>审计(审计/内审/内部控制/事务所)、预警系统(预警/风险预警/现金流预警)、现金流分析(现金流分析/现金流量分析)、职责分离(不相容/职责分离/审批流程)。缺失计数：≥3 内控薄弱 / =2 明显缺陷 / =1 基本良好 / 0 体系完善。</p>
+<table>
+<tr><th>风险分（calc_risk_level）</th><th>规则</th></tr>
+<tr><td>data 类分</td><td>min(3, data异常数)——白名单：利润含金量异常/资金结构异常/资金管控异常（兼容旧名）</td></tr>
+<tr><td>behavior 类分</td><td>min(2, behavior异常数)——过度扩张嫌疑/过度投资风险/民企扩张风险/销售现金背离</td></tr>
+<tr><td>内控分</td><td>min(2, 内控缺失数)</td></tr>
+<tr><td>总分档</td><td>总分≥5 高风险；≥3 中风险；≥1 低风险；0 正常。<b>实际上限=3+2+2=7</b>（注释/trace 误写 0-6）</td></tr>
+</table>
+<div class="box warn"><b>两点注意：</b>① fraud_patterns 的产出（应收异常、毛利率异常、M-Score 等）<b>不在 data/behavior 白名单内 → 不计入风险分</b>，只进 <code>ctx.logic_anomalies</code>；② SOE 判定质量低——先判 <code>tags.financial_profile</code>（恒 None）再用 hard_tags，公司名含 中国/国家/中央/集团/控股集团 即判国企。</div>
+<h4>4.4.1 fraud_patterns.py（扩展造假模式，供参考不计分）</h4>
+<table>
+<tr><th>模式</th><th>规则</th></tr>
+<tr><td>应收-营收缺口</td><td>应收/营收 &gt;<b>0.5</b> 起疑（实现为静态占比；docstring 却写"增速比较×1.5/2.0"，两者不符）；severity=min(5, ratio/0.5×2.5)</td></tr>
+<tr><td>毛利率异常</td><td>毛利率正常带 [0.05,0.80]；&lt;0.02 或 &gt;0.90 → severity 2.0，较重 1.0</td></tr>
+<tr><td>研发资本化</td><td>无形资产/总资产 ≥<b>0.3</b> 起疑；÷0.3×3</td></tr>
+<tr><td>存货堆积</td><td>存货/总资产 ≥<b>0.3</b>；÷0.3×2.5</td></tr>
+<tr><td>关联交易</td><td>关联销售/营收 ≥<b>0.3</b>；÷0.3×3.5</td></tr>
+<tr><td>非经常损益</td><td>占净利 ≥<b>0.3</b> 且为正；÷0.3×3</td></tr>
+<tr><td>洗大澡</td><td>净利&lt;0 且经营现金&gt;0，且（减值 &gt; 亏损额 50% 或 商誉&gt;0）→ severity 4.0</td></tr>
+<tr><td>Beneish M-Score</td><td>线性组合，系数 −4.84/0.920/0.528/0.404/0.892/0.115/−0.172/4.679/−0.327；<b>M&gt;−1.78</b> 判操纵嫌疑；M&gt;−1.0→3.0 否则 2.0；偏高指标 &gt;1.1 标注；缺 13 字段任一 → 不判</td></tr>
+</table>
+
+<h3>4.5 C 层 — 偏差计算（layer_c_deviation）— 纯代码</h3>
+<p>C 层<b>不选同行</b>，直接消费 A2 的 <code>Benchmark</code>（peer_median + peer_companies）。判定量：<b>偏离倍数 = |实际 − 同行中位| / 稳健尺度</b>（mad_calculator.py:122）。</p>
+<table>
+<tr><th>项</th><th>值/规则</th></tr>
+<tr><td>尺度选择</td><td>同行数 n ≥ <code>_SMALL_SAMPLE=8</code> → 用 Sn 估计量；n&lt;8 → 用 MAD</td></tr>
+<tr><td>Sn 一致性因子</td><td><code>_SN_CONSISTENCY = 1.1926</code>（Rousseeuw &amp; Croux）；实现为近似 Sn（偶数 n 未做中位两值平均；自称 O(n log n) 实际 O(n² log n)）</td></tr>
+<tr><td>异常阈值</td><td><b>偏离倍数 ≥2.0</b> 判 abnormal；<b>≥5.0</b> 判 extreme（mad_calculator.py:261-322）</td></tr>
+<tr><td>同行不足 Bootstrap 复核</td><td>n_peers &lt;15 且初判&gt;2.0 → 1000 次重采样取 95% CI 下界 lo（n&lt;5 粗暴返回 [0.5σ,2σ]；lo≤0→max(1e-6,最小正)；hi≤lo→hi=2lo）→ 用 lo 重算倍数 &lt;2.0 → <b>判为虚报降级、跳过不报</b></td></tr>
+<tr><td>边界</td><td>同行全同值 → scale=0 → 偏离倍数=inf → 直接 extreme（并绕过 bootstrap，属病态案例）</td></tr>
+<tr><td>指标实际值</td><td>由<b>桥接公式</b>从原始财务字段算 5 个东财比率码：XSMLL=(营收−营业成本)/营收×100；XSJLL=净利/营收×100；TOAZZL=营收/总资产；ZCFZL=负债/资产×100；ROEJQ=净利/权益×100；未覆盖指标（如 YYZSRGDHBZC 营收增速，需跨年故注释显式跳过）→ 兜底直接字段名匹配，算不出跳过</td></tr>
+<tr><td>时序突变 Pettitt</td><td>实现存在（p&lt;0.05，n&lt;20 乘保守因子，n≥4）但<b>默认管线未接线=死代码</b>（__init__ 调用未传 historical；Benchmark.historical_mean 形状也不匹配）</td></tr>
+</table>
+<div class="box warn"><b>注意：</b><code>deviation_scorer.py</code>（rank/filter/group/summary 工具）整个模块未被当前流水线调用；截面判 extreme 用 <code>&gt;=5.0</code> 而时序路径用 <code>&gt;5.0</code>，口径不一致。</div>
+
+<h3>4.6 D 层 — 原因推理（layer_d_reasoning）</h3>
+<p>注册顺序 D1→D2→D3，每异常处理。单个异常全程约 <b>3 + 归因条数</b> 次 LLM：D1 两路各 1 + D2 合并 1 + D3 每归因 1。</p>
+<h4>4.6.1 D1 双路径（d1_dual_path.py）</h4>
+<ul>
+<li><b>路1 查原文解释</b>（d1_lookup_notes.py，prompt <code>d1_lookup_notes</code>）：把 MD&amp;A 各节 + 附注<b>全量原文整段发给 LLM，不做关键词预过滤</b>；解析取 <code>sources[0]</code> 为主来源，location 正则抽页码；<code>is_vague</code> 硬编码 False。</li>
+<li><b>路2 外部推演</b>（d1_hypothesis.py，prompt <code>d1_hypothesis</code>）：输入 = macro_facts（无则占位）+ 行业 hard_tags + 主营业务描述；偏离度本地重算严重度（≥5 极端 / ≥2 显著 / 轻微）；来源 type 去重拼接为 reasoning。</li>
+<li>每路结果在 D1 即截断<b>前 5 条</b>；按 LLM <code>confidence_rank</code> 升序排序（非"权威性×共识"——那只用于 D2 m₂ 权重）。</li>
+</ul>
+<div class="box warn"><b>隔离表述漏洞：</b>路2 用的 <code>business_desc</code> 取自 <code>raw_doc.company_overview.business_description</code>，即路2 实际拿到一份 raw_doc 派生字段（仅主营业务描述，非 MD&amp;A/附注）。</div>
+<h4>4.6.2 D2 概率分配（d2_probability.py）— D-S 证据理论（数学为纯代码）</h4>
+<p>参数在 <code>config/thresholds.yaml → d2_layer:</code>（epsilon_1=0.35 / epsilon_2=0.30 / path1_split_primary=0.70 / secondary=0.30 / path2_top_n=5 / conflict_threshold=0.60）。</p>
+<ol>
+<li><b>Step0 语义合并+冲突（LLM，prompt <code>d2_merge_conflict</code>）</b>：把两路归因编成 <code>merged_causes{name, path1_indices, path2_indices, conflicts_with}</code>。<b>失败即 raise</b>（docstring 与实现相反），真正的批级降级在 layer_d/__init__：整批替换为 <code>{"信息不足":1.0}</code>。</li>
+<li><b>Step1 路1 mass m₁</b>（纯代码，pool=1−ε₁=0.65）：k=0→Θ=1；k=1→0.65；k=2→主因 0.65×0.70=0.455、次因 ×0.30=0.195（谁主谁次由 LLM 列表顺序定）；k≥3→<b>指数衰减</b>每项拿剩余一半、末项拿光；末尾 m₁[Θ]=0.35。</li>
+<li><b>Step2 路2 mass m₂</b>（纯代码，pool=1−ε₂=0.70）：对每归因算 <code>consensus_weight = source_authority(最高)×source_count_bonus</code>；权威映射（代码硬编码）：券商深度报告=1.0 / 官方公告=1.0 / 行业新闻=0.7 / 财经媒体=0.7 / A0宏观=0.6 / 行业常识=0.5 / 雪球股吧自媒体=0.3 / 其余 0.1（子串短路匹配）；数量奖励：≥3 来源→1.0 / 2→0.7 / 1→0.4 / 0→0.2。按 cw 降序取 top_n=5，归一后 ×0.70，m₂[Θ]=0.30。</li>
+<li><b>Step3 Dempster 合成</b>（非标准变体，纯代码）：同名→累加；Θ×项→分给另一方；Θ×Θ→Θ；<b>仅 conflict_map 中明确互斥的对才计入冲突 K</b>；<b>两个未被标记冲突的不同归因 → 整项并入 Θ（视为未知，而非标准 D-S 的空集冲突）</b>。norm=1−K；norm≤1e-10（完全冲突）→ 返回 {Θ:1},K=1。severe_conflict = <b>K&gt;0.60</b>（仅元数据标注，不影响数值）。</li>
+<li><b>Step4 Pignistic 转概率</b>：<b>Θ 不摊回，单列为"其他原因"桶</b>（如 A44%/B30%/其他26%）；round 4 位后 Σ 偏差&gt;1e-4 → 残差补到最大概率键。</li>
+</ol>
+<div class="box warn"><b>配置脱钩：</b><code>cfg["path1_split_primary"]</code> 从未被传入 <code>_build_m1</code>（用函数签名默认 0.70，恰与 config 同值）；<code>cfg["path1_split_secondary"]</code> 全文无引用（次因由 1−primary 推导）。改 config 这两项<b>不生效</b>。</div>
+<h4>4.6.3 D3 语义匹配（d3_semantic_matcher.py）</h4>
+<p>对每异常每归因<b>单独调一次 LLM</b>（prompt <code>d3_semantic_match</code>，把整份 semantic_scoring.yaml levels 塞给模型选档）。<b>"取最严重"没有代码实现</b>，完全压在 prompt 里。代码只做：特例 <code>"其他原因"</code> → 免 LLM 返回 (0, ["其他原因"])；校验返回档位 ∈ {−3,−2,−1,0,1,2}，越界<b>强制改为 −1</b>；matched_keywords 截断最多 3 个。语义档库见 §10。</p>
+
+<h3>4.7 E 层 — 评分与报告（layer_e_output）</h3>
+<p>顺序 E1（纯代码算分）→ E2（组装报告 + 少量 LLM 文本润色）。<b>重要：E1 完全不读 <code>config/weights.yaml</code></b>（WEIGHTS_PATH 声明未用，见 §12）。</p>
+<h4>4.7.1 E1 打分（e1_scoring.py）</h4>
+<p>基础分 100，逐异常累加扣分（可为负到负分）：
+<code>anomaly_score = w_phe × (1−K) × Σ P(Hᵢ)·S_base(Hᵢ)</code></p>
+<ul>
+<li><code>w_phe</code>（现象严重性）：B+ 异常=其 <code>severity</code>（0.5–5.0）；C 异常 = <code>min(mad_multiple/3.0, 5.0)</code>。</li>
+<li><code>delta = 1 − K</code>（K=D-S 冲突系数，缺失默认 0）；<code>score_base</code> 取 D3 语义档（缺省 −1）；<code>effective_score = score_base × delta</code>。</li>
+<li>找不到对应 D 推理（按 (source, indicator) 精确匹配）→ 该异常静默跳过不计分（仅 warning）。</li>
+<li><b>Bel/Pl 上下界</b>：<code>m_theta=mass_final["Θ"]</code>，known=1−mθ；若 mθ&gt;0 且语义档非空：悲观把 Θ 全给 S=−3 → <code>score_bel</code>（最大扣分），乐观把 Θ 全给 S=+2 → <code>score_pl</code>（最小扣分）；否则三点相等。命名逆直觉：bel=下界分（更差）、pl=上界分。</li>
+<li>总分 = 100 + Σ anomaly_score；最终 <code>[Bel, Pl] = [100+Σbel, 100+Σpl]</code>（lower=min(total_bel,center)，upper=max(total_pl,center)）。</li>
+<li><b>置信度档：score ≥80 → 高置信度；≥60 → 中等置信度；否则低置信度</b>（e2_report_gen.py:199）。</li>
+</ul>
+<p><b>TrustInterval 展示（e2_report_gen 聚合）：</b>avg_k=ΣK/count；avg_m_theta 由 <code>diff=2·w_phe·delta·5</code> 反推——公式<b>额外多除 2</b>，展示性偏小（不影响分数）。</p>
+<h4>4.7.2 E2 报告（e2_report_gen.py + chart_engine.py）</h4>
+<table>
+<tr><th>模块</th><th>内容</th></tr>
+<tr><td>0 宏观折线图</td><td>8 张：销售毛利率 XSMLL / 销售净利率 XSJLL / 总资产周转率 TOAZZL / 资产负债率 ZCFZL / 营收增长率 YYZSRGDHBZC / 经营现金流净利比 NCO_NETPROFIT / ROE ROEJQ / 流动比率 LD。figsize(10,5.5)、dpi=150、Agg 后端；目标公司红线 #E74C3C，同行取前 5 灰系</td></tr>
+<tr><td>1 评级+区间</td><td>综合分、[Bel,Pl]、avg_m_theta、avg_k</td></tr>
+<tr><td>2+3 核心异常</td><td>异常（source B+/C）、D2 概率、evidence 取 lookups[:3]（摘录[:200]）、severity 标签（extreme→🔴严重）；<code>anomaly_score_detail</code> 恒传 None（致后续 semantic_scores_avg 恒 0）</td></tr>
+<tr><td>4 总结（LLM <code>e2_summary</code>）</td><td>输入 top5 异常；失败回退结构化摘要；另有 <code>e2_explanation</code> 生成解释段落（失败回退：K&gt;0.6 → "两路证据存在显著分歧"）</td></tr>
+<tr><td>5 证据溯源</td><td>每归因一条 footnote <code>fn_001…</code>：优先路1 source_text[:300]+页码；无→路2 推演假设(reasoning[:300])；都没有→"综合分析/D-S 合成"</td></tr>
+<tr><td>多空逻辑栈</td><td>C extreme→“…倍MAD”空头、B+ summary 空头、有 peer→多头；否则"无显著异常/建议进一步分析"</td></tr>
+</table>
+<p>Markdown 渲染另加「企业经营全景」区（健康档：≥90 优秀 / ≥75 良好 / ≥60 一般 / 否则需关注，e2_report_gen.py:830-838）。CLI 调 <code>render_to_markdown(report)</code> 无 ctx → 经营全景缺核心财务指标表；Web runner 传 <code>orch._last_ctx</code> → 有。</p>
+
+<h2 id="s5">5. LLM 网关（llm/）</h2>
+<h3>5.1 多厂商路由（llm/client.py）</h3>
+<p>统一入口 <code>LLMClient.chat(prompt_name, variables, temperature=None, max_tokens=None)</code>。provider 由 <code>LLM_PROVIDER</code>（默认 anthropic）；模型优先级：显式 model → <code>LLM_MODEL_{PROVIDER}</code> 环境变量 → default_model。`.env` 每次 import 以 <code>override=True</code> 加载（会覆盖既有环境变量）。</p>
+<table>
+<tr><th>provider</th><th>adapter</th><th>env_key</th><th>默认模型</th><th>max_output_tokens</th></tr>
+<tr><td>anthropic</td><td>anthropic SDK</td><td>ANTHROPIC_API_KEY</td><td>claude-sonnet-5-20250610</td><td>—</td></tr>
+<tr><td>openai</td><td>openai SDK</td><td>OPENAI_API_KEY</td><td>gpt-4o-2025-06-01</td><td>—</td></tr>
+<tr><td>deepseek</td><td>openai 兼容</td><td>DEEPSEEK_API_KEY</td><td>deepseek-v4-flash</td><td>16384</td></tr>
+<tr><td>qwen</td><td>openai 兼容</td><td>QWEN_API_KEY</td><td>qwen-plus</td><td>—</td></tr>
+<tr><td>glm</td><td>openai 兼容</td><td>GLM_API_KEY</td><td>glm-4.7-flash</td><td>16384</td></tr>
+<tr><td>moonshot / gemini / doubao</td><td>openai 兼容</td><td>MOONSHOT / GEMINI / DOUBAO</td><td>moonshot-v1-8k / gemini-2.0-flash / doubao-pro-32k</td><td>—</td></tr>
+</table>
+<h3>5.2 参数 / 重试 / 边界</h3>
+<ul>
+<li>重试：<code>max_retries=3</code>；401/403/unauthorized <b>不重试直接抛</b>；429 → 指数退避 <code>2^(attempt+1)</code>（2s、4s）；其它错误 wait=1s；timeout_seconds=300。</li>
+<li>空输出：连续 3 次为空 → <code>RuntimeError("LLM 连续 3 次输出为空…")</code>，无降级。</li>
+<li>max_tokens 兜底：anthropic/openai <code>4096</code>；deepseek/glm 未显式限长被"上限保护"改为 <code>16384</code>。</li>
+<li>原生思考链：<code>NO_THINKING_PROMPTS={"b0_semantic_guide"}</code>（仅对 OpenAI 兼容厂商 <code>extra_body={"thinking":{"type":"disabled"}}</code> 关闭）；Anthropic 侧无开关。推理类 prompt（表分类、d1/d2/d3）保留思考链，reasoning_content 流式进 tracer。</li>
+<li>缓存：仅 PromptLoader 对 prompt 模板进程内缓存，<b>无 API 响应缓存</b>。</li>
+<li>token：优先 API usage；缺省估算 <code>len(text)//2</code>。cost 表只含 5 个模型（claude-sonnet-5 3/15、claude-opus-5 15/75、gpt-4o 2.5/10、gpt-4o-mini、deepseek-chat）——<b>默认模型 deepseek-v4-flash 不在表内 → 估费恒 0</b>。</li>
+<li>B0 语义指引是唯一经 Pydantic schema 校验？——否：B0 实际手解析；各 LLM 返回多靠 <code>response_parser.parse_json</code>（剥 fence、单引号转双引号）手写容错。</li>
+</ul>
+<p>错误策略总览（三层各异）：L0 表分类 漏表 raise→规则降级；B0 raise→规则降级；A0 raise→<code>[]</code>；D1 raise→D 层给空结构；D2 合并 raise→D 层批级 <code>{"信息不足":1.0}</code>；D3 raise→跳过；E2 文本 raise→回退模板。</p>
+
+<h2 id="s6">6. Prompt 模板清单（config/prompts/，全部 YAML + Jinja2，改 prompt 不用改代码）</h2>
+<table>
+<tr><th>模板</th><th>归属步骤</th><th>作用</th></tr>
+<tr><td>b0_table_localization</td><td>L0</td><td>表头前 2 行 → 表格类型/报表范围分类（命名带 b0 但归 L0）</td></tr>
+<tr><td>a0_search_query</td><td>A0</td><td>按 4 宏观维度生成搜索词（每维 ≥3，须含"今年"）</td></tr>
+<tr><td>a0_macro_facts</td><td>A0</td><td>搜索 snippets → 宏观事实（带来源/日期，矛盾跳过，无数据→[]）</td></tr>
+<tr><td>b0_semantic_guide</td><td>B0</td><td>表头/科目 → 标准字段映射（唯一关思考链）</td></tr>
+<tr><td>d1_lookup_notes</td><td>D1 路1</td><td>原文查解释（全量原文，输出 explanations+页码）</td></tr>
+<tr><td>d1_hypothesis</td><td>D1 路2</td><td>宏观+行业+主营 → 外部推演假设</td></tr>
+<tr><td>d2_merge_conflict</td><td>D2 Step0</td><td>两路归因语义合并 + conflicts_with</td></tr>
+<tr><td>d3_semantic_match</td><td>D3</td><td>原因描述 → 三档语义 level（每归因一次）</td></tr>
+<tr><td>e2_explanation / e2_summary</td><td>E2</td><td>解释段落 / 综合总结（文本润色）</td></tr>
+<tr><td>test_connection</td><td>Web</td><td>连通性测试（max_tokens=20）</td></tr>
+</table>
+
+<h2 id="s7">7. 配置体系总表（config/）</h2>
+<table>
+<tr><th>文件</th><th>实际内容与消费方</th><th>维护人（README 口径）</th></tr>
+<tr><td>thresholds.yaml</td><td><b>仅 D2 D-S 参数</b>（d2_layer:）——B+/C 阈值已迁走（注释自述），README 仍称它管 B+/C，已过时</td><td>负责人</td></tr>
+<tr><td>industry_thresholds.yaml</td><td>B+ 行业分位数阈值（p25/p75/p70/median/mean/std），含 fallback 与金融 skip_checks；<b>B+ 实际主力配置</b></td><td>分析师/数据工程</td></tr>
+<tr><td>weights.yaml</td><td><b>E1 不读它</b>；仅 deviation_scorer.group_by_category 取 category 分组名；overrides 为死配置</td><td>分析师（设计意图）</td></tr>
+<tr><td>semantic_scoring.yaml</td><td>D3 语义三档关键词库（score_base −3..+2）+ E1 语义分来源</td><td>分析师</td></tr>
+<tr><td>financial_fields.yaml</td><td>B0 中文/英文变体 → 标准字段名映射（551 行；M-Score 新字段英文别名写在各字段块内，规则降级路径不读→仅进 LLM 清单）</td><td>开发</td></tr>
+<tr><td>prompts/*.yaml</td><td>全部 LLM 模板（10 支 + test_connection）</td><td>分析师/开发</td></tr>
+<tr><td>.env</td><td>API Key / LLM_PROVIDER / LLM_MODEL_* / MINERU_TOKEN / SERPAPI_KEY（<b>.env 已在仓库内</b>，import 时 override 加载）</td><td>用户</td></tr>
+</table>
+
+<h2 id="s8">8. 关键阈值速查总表（按层汇总）</h2>
+<table>
+<tr><th>层</th><th>阈值 / 常量</th><th>出处(文件:行)</th></tr>
+<tr><td>L0</td><td>MinerU 单次 200 页；TOC 忽略 ≤10 页；表分类批 40、温度 0.0、重试≤2、漏表即终止→规则降级；表头文本 300 字符、送 LLM 看表头前 2 行；附注每页 3 条/2000 字；MD 标题 40 字（注释写 30）；公司信息正则组提取</td><td>chunker.py / toc_splitter.py</td></tr>
+<tr><td>A</td><td>同行池 ≥5 家；MAD 池 max(ceil(20%N),5)、N&lt;10→Top5；Top5 展示；仅 5 年年报；akshare 25s/并发6；IQR 下限 1e-10；A0 ≤12 查/每查 top3/30s/截 8000</td><td>a2_matcher.py / a0_macro_search.py</td></tr>
+<tr><td>B</td><td>勾稽容差 1%（软项自动过）；金额 2 位小数、超 1e15 判错；单位×1e0/1e3/1e4/1e6/1e8；交叉验证偏差 &gt;5% 异常/1–5% 提示；列优先级 (col_2,col_3,col_1)</td><td>b1_validators.py / b1_extractors.py</td></tr>
+<tr><td>B+</td><td>净现比/收现比 双&lt;p75 或双&lt;0.6；p25 极严重；存贷双高双&gt;p75(0.30/0.42)；母子分离 &gt;mean+2σ；增长&gt;15%且现金流负债比&lt;−0.05；应收&gt;0.3/净利率&lt;0.05；规模 40亿/5亿分层修正 ×0.65-1.30；内控缺失 3/2/1/0；风险分 ≥5/≥3/≥1；M-Score&gt;−1.78</td><td>logic_checks.py / fraud_patterns.py</td></tr>
+<tr><td>C</td><td>偏离倍数 ≥2.0 异常 / ≥5.0 极端；Sn 一致性 1.1926；n≥8 用 Sn 否则 MAD；n_peers&lt;15→Bootstrap 1000/95%CI；lo 下界 1e-6；w_phe=min(mad/3,5)</td><td>mad_calculator.py</td></tr>
+<tr><td>D</td><td>ε₁=0.35 ε₂=0.30 主次 0.70/0.30 top5；k≥3 指数衰减；冲突 K 归一 1−K；完全冲突 1e-10；K&gt;0.60 severe；Pignistic round4/Σ差 1e-4 补差；语义档 ∈{−3..2} 越界改 −1；来源权威 1.0/0.7/0.6/0.5/0.3/0.1；关键词截 3</td><td>d2_probability.py / d3_semantic_matcher.py</td></tr>
+<tr><td>E</td><td>基础分 100；Bel/Pl 按 Θ 全给 ±极值；置信档 80/60；经营全景健康档 90/75/60；异常源截 200/300；severity≥4→extreme；footnote fn_{idx:03d}</td><td>e1_scoring.py / e2_report_gen.py</td></tr>
+<tr><td>网关/校验</td><td>重试 3 次、429 退避 2/4s；空输出重试 3；max_tokens 4096/16384；validate_pdf：大小 0.5–200MB、页数 30–1000、财务关键词 ≥3、只扫前 20 页</td><td>llm/client.py / scripts/validate_pdf.py</td></tr>
+</table>
+
+<h2 id="s9">9. 行业阈值机制详解（B+）</h2>
+<p>数据结构：<code>industries.&lt;行业名&gt;.{net_profit_cash_ratio_p25/p75/median, sales_cash_ratio_p25/p75/median, cash_to_assets_p75/p70/avg, debt_to_assets_p75/p70/avg, fund_separ_mean/std}</code>，部分含 <code>note</code> 与 <code>skip_checks</code>；顶部有 <code>fallback:</code>。示例（白酒）：净现比 p25 0.55 / p75 1.10 / 中位 0.85；货币资金占比 p75 0.42；有息负债占比 p75 0.18；母子分离 mean 0.08 / std 0.04。金融行业（银行/城商行/证券/保险）净现比/收现比多为 null + <code>skip_checks:["净现比","收现比"]</code>。</p>
+<ol>
+<li><b>加载与缓存：</b><code>_load_industry_thresholds</code> 结果缓存模块级；cfg 有效判据含 skip_checks/note 等非 None 字段 → 银行全 null 块仍判"有效"，阈值再由 <code>_get_ind_threshold</code> 逐 key 落默认值。</li>
+<li><b>逐 key 取值链：</b>行业配置值 →（key 含 p75 则试 p70×1.2 推算）→ 函数默认参数（净现比 p75 0.85 / 收现比 0.95 / 存贷 0.30·0.42 / p25 0.25）。</li>
+<li><b>规模修正</b>（按总资产 ≥40亿 大型 / ≥5亿 中型 / else 小型，缺资产默认大型）：下尾阈值（p25/净现 p75）小型 ×0.65、中型 ×0.82；上尾（cash_to/debt_to 的 p75）小型 ×1.30、中型 ×1.15。语义：净现比/收现比对小公司放宽；存贷双高对小公司收紧。</li>
+<li><b>skip_checks 仅一处使用：</b><code>run_all_checks</code> 对"净现比"门控 ① 检查；存贷双高/母子分离不受 skip 影响。→ 银行等天然高杠杆下存贷双高仍会跑且落全局默认（YAML 注释称"用专项指标替代"，代码未实现专项）。</li>
+<li><b>代码默认值 ↔ YAML fallback 双写</b>，当前一致（p25 0.25 / p75 0.85 / cash p75 0.30 / debt p75 0.42 / mean 0.10 / std 0.06）。</li>
+<li><b>数据来源</b>（注释口径）：akshare 全 A 近 5 年统计，季度随财报季更新。另 <code>scripts/build_industry_quantiles.py</code> 能生成 <code>industry_quantiles.yaml</code>（p05–p95/mean/std），但<b>当前未被任何代码消费</b>；其中"规模分层"实际按代码枚举顺序三等分（非真实总资产，循环体 pass），分位数回归为占位符。</li>
+</ol>
+
+<h2 id="s10">10. 评分与证据理论数学</h2>
+<h3>10.1 D-S 三档语义库（config/semantic_scoring.yaml → D3/E1）</h3>
+<table>
+<tr><th>score_base</th><th>档</th><th>示例关键词</th></tr>
+<tr><td>−3</td><td>严重负向（造假/虚构/隐瞒/利益输送）</td><td>造假、粉饰、虚增、虚构、隐瞒负债、资金占用、违规担保、关联交易非关联化…</td></tr>
+<tr><td>−2</td><td>中度负向（会计处理不当/激进）</td><td>激进、提前确认、跨期调节、资本化过度、减值不充分、坏账准备不足…</td></tr>
+<tr><td>−1</td><td>轻微负向（指标偏高/偏低/风险）</td><td>偏高、波动、风险、下滑、背离、恶化、缺口、压力、放缓…</td></tr>
+<tr><td>0</td><td>中性（行业性质/季节/正常波动）</td><td>行业性质、季节因素、正常波动、无风险、解释合理、可控…</td></tr>
+<tr><td>+1</td><td>正向（稳健/充足/改善）</td><td>稳健、充足、良好、改善、覆盖充分、充裕、提升…</td></tr>
+<tr><td>+2</td><td>显著正向（远超预期/行业领先）</td><td>远超预期、行业领先、极其稳健、极低风险、标杆…</td></tr>
+</table>
+<h3>10.2 E1 最终数学</h3>
+<pre>
+final_score = 100 + Σ_{异常 i}  w_phe(i) · (1 − K_i) · Σ_{归因 H}  P(H) · S_base(H)
+bel_lower   = 100 + Σ  w_phe · delta · [ (mass_raw + m_θ·(−3)) / (1−m_θ) ]   # 悲观: Θ→S=−3
+pl_upper    = 100 + Σ  w_phe · delta · [ (mass_raw + m_θ·(+2)) / (1−m_θ) ]   # 乐观: Θ→S=+2
+置信度:  ≥80 高  /  ≥60 中  /  其余 低
+</pre>
+<p>mass_raw = Σ cause_mass×S_base；GLOBAL_S_MIN=−3 / MAX=+2。扣分不设下限（总分可为负）；B+/C 异常各以 (source, indicator) 精确对齐 D 推理，缺推理即跳过。</p>
+
+<h2 id="s11">11. 辅助工具 / Web / 数据构建</h2>
+<table>
+<tr><th>脚本/模块</th><th>作用</th></tr>
+<tr><td>scripts/run_pipeline.py</td><td>CLI 主入口（--pdf / --output / --from）</td></tr>
+<tr><td>scripts/validate_pdf.py</td><td>PDF 预检：大小 0.5–200MB、页数 30–1000、财务关键词 ≥3、只扫前 20 页</td></tr>
+<tr><td>scripts/show_report.py</td><td>把 JSON Report 渲染 Markdown/终端</td></tr>
+<tr><td>scripts/batch_analyze.py</td><td><b>不可用骨架</b>：import 目标错误 + 循环体为 TODO</td></tr>
+<tr><td>scripts/build_industry_csv.py</td><td>cninfo 申万分类树 → data/industry/sw_industry_classification.csv（按 父类编码 还原一/二/三级）</td></tr>
+<tr><td>scripts/build_benchmark_db.py</td><td>仅 CSV 导入可用；--industry 分支为 TODO</td></tr>
+<tr><td>scripts/build_industry_quantiles.py</td><td>生成 industry_quantiles.yaml（未被消费，规模分层未按真实总资产）</td></tr>
+<tr><td>pipeline/runner.py</td><td>Web 单份分析入口 run_single_analysis(pdf, controls)；AnalysisControl(cancel/pause threading.Event)</td></tr>
+<tr><td>web/app.py（FastAPI）</td><td>GET / 首页；GET /api/providers 列厂商+has_key+current_model；POST /api/config 写 .env；POST /api/test-connection（mineru 假任务探活/LLM test_connection）；POST /api/analyze（存 PDF 到 data/raw，后台线程跑，单任务锁 → 并发 409）；GET /api/analyze/{id}/events SSE（等 trace.jsonl 60×0.2s，轮询 0.3s 推 render_markdown(summary_only)）；cancel/pause/resume；/charts 挂载</td></tr>
+</table>
+
+<h2 id="s12">12. 已知不一致与实现注意点（以代码为准）</h2>
+<div class="box warn">
+<ol>
+<li><b>weights.yaml 与 E1 脱节（最重要）：</b>README 称其为 E1 打分权重，实际 E1 完全不读（WEIGHTS_PATH 声明未用），全库无 base_weight/amplification_cap 消费方；overrides（银行/重资产/高研发）为死配置。</li>
+<li><b>八步 vs 七层：</b>实际多一个 <code>layer_amacro</code>(A0)，且依赖 financials 排在 B 后；README 六层表未体现。</li>
+<li><b>--no-llm 参数不存在</b>（README 声称有）。</li>
+<li><b>README 配置表过时：</b>industry_tags.yaml 不存在；thresholds.yaml 只装 D2 参数；B+ 主力是 industry_thresholds.yaml。</li>
+<li><b>维度/取数语义错位</b>（A2）："研发费用率/销售费用率"实取营收同比/加权 ROE。</li>
+<li><b>prompt 命名错位：</b>b0_table_localization 归 L0；b0_semantic_guide 才是 B0 且是唯一关思考链。</li>
+<li><b>D2 合并失败=批级降级</b>：docstring 称"不合并各自独立"，实际 raise 后整批 <code>{"信息不足":1.0}</code>，一条失败废掉整批概率分配。</li>
+<li><b>config 脱钩：</b>path1_split_primary/secondary 改配置不生效（代码用默认 0.70/1−p）。</li>
+<li><b>Pettitt 时序 / deviation_scorer / industry_quantiles 当前是死代码</b>（未接线或未被消费）。</li>
+<li><b>风险总分上限实为 7</b>，文档/trace 误写 0-6；fraud_patterns 不计入风险分。</li>
+<li><b>FinancialStatement.validation 恒为占位真值</b>，真实校验只在 ctx.validation_passed；下游勿读 financials.validation。</li>
+<li><b>Bel/Pl 命名逆直觉</b>：score_bel=最悲观(下界)、score_pl=最乐观(上界)。</li>
+<li><b>置信度用字符串而非枚举</b>；且"综合评级档 80/60"与"经营全景健康档 90/75/60"是两套。</li>
+<li><b>OCR 单字全局替换</b>（己/巳→已、末→未、午→年、曰→日）会误伤正常文本。</li>
+<li><b>MinerU 路径硬编码</b> <code>C:\Users\xu\...</code>，换机必降级 pdfplumber；页码 0/1 基口径不统一（±1 页）。</li>
+<li><b>同比类检查在单期数据下基本是死代码</b>（依赖 Revenue_Prior_Year，不在 _KEY_TOTALS，多数填不出）。</li>
+<li><b>金融 skip 只覆盖净现比/收现比</b>；存贷双高对银行仍跑且落全局默认（易误报）。</li>
+<li><b>__init__.py 导出不全</b>：schemas/__init__ 未导出 TrustInterval/AnomalyScoreDetail/CauseDetail/EvidenceSource/ChartConfig。</li>
+<li><b>模块4 semantic_scores_avg 恒 0</b>：core_anomalies 恒传 anomaly_score_detail=None。</li>
+<li><b>_estimate_m_theta 反推多除 2</b>，展示的 avg_m_theta 系统性偏小。</li>
+<li><b>CLI 与 Web 的 Markdown 有差异</b>（CLI 无 ctx → 经营全景缺核心财务表）。</li>
+<li><b>batch_analyze.py 不可用</b>；.env 已在仓库且 import 覆盖环境变量（安全注意）。</li>
+</ol>
+</div>
+
+<h3>12.1 推荐阅读/对照</h3>
+<ul>
+<li>本仓库 <code>README.md</code>（设计意图，含六层概念图）；<code>doc/architecture-v5.1.md</code>（旧版设计，与本文部分阈值/层序不一致，以本文为准）。</li>
+<li>各层算法与阈值的权威出处即 <code>layers/**/*.py</code> 与 <code>config/*.yaml</code>，行号已在各表标注。</li>
+</ul>
+
+<p class="foot">本架构文档依据 <code>dev</code> 分支 HEAD 7e4ebea 逐字核对于源码与配置文件生成；正文引用的所有数值均可回溯到标注的 <code>文件:行号</code>。文档 HTML 源文件与本文同目录（.html），可用浏览器/Edge 重新导出 PDF。— 生成于 2026-09-06。</p>
+
+</div>
+</body>
+</html>

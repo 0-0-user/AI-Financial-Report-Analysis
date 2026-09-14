@@ -28,8 +28,16 @@ from schemas.report import (
     PeerComparison, ScoreBreakdown, TrustInterval, EvidenceSource,
     AnomalyScoreDetail, ChartConfig,
 )
+from layers.layer_e_output.e1_scoring import OTHER_CAUSE
+from schemas.benchmark import MIN_PEER_SAMPLE
 
 logger = logging.getLogger(__name__)
+
+# 归因完整度阈值: 平均未归因质量 m(Θ) 超过这些线就把置信度分级往下压。
+# m(Θ) >= 0.5 表示过半质量无法归因 -> 结论本质上是"不知道"，判低置信度；
+# m(Θ) >= 0.25 表示四分之一的归因是"其他原因" -> 不足以称高置信度。
+M_THETA_LOW_TIER = 0.5
+M_THETA_MEDIUM_TIER = 0.25
 
 
 def _safe_get_k(reasoning) -> float:
@@ -156,18 +164,13 @@ def _build_trust_interval(ctx: PipelineContext) -> Optional[TrustInterval]:
     total_pl = 100.0 + sum(d.score_pl for d in details)
     total_center = 100.0 + sum(d.anomaly_score for d in details)
 
-    # 平均 m(Θ) 和 K
+    # 平均 m(Θ) 和 K。m(Θ) 由 E1 直接给出（含"其他原因"占比），
+    # 无需再从 bel/pl 差值反推。
     m_theta_sum = 0.0
     k_sum = 0.0
     for d in details:
         k_sum += d.k_value
-        # 从 mass_final 读取 m(Θ) 的近似值: 
-        # 如果 bel != pl -> 有不确定性 -> m_θ > 0
-        # 简单估计: mθ ~ |score_pl - score_bel| / (2 * |w_phe * delta|)...
-        # 实际上我们用更简单的方式: mθ ~ (d.score_pl - d.anomaly_score) / (w_phe * delta * 5)
-        # 但这个太 hacky 了。从异常分数反推 mθ 不准确。
-        # 对于展示，我们用 bel/pl 的相对差异来表示不确定性层级。
-        m_theta_sum += _estimate_m_theta(d)
+        m_theta_sum += d.m_theta
 
     count = len(details)
     return TrustInterval(
@@ -179,17 +182,6 @@ def _build_trust_interval(ctx: PipelineContext) -> Optional[TrustInterval]:
     )
 
 
-def _estimate_m_theta(detail: AnomalyScoreDetail) -> float:
-    """从 anomaly score 的 bel/pl 差异估算 m(Θ)"""
-    diff = abs(detail.score_pl - detail.score_bel)
-    if diff < 1e-6 or abs(detail.w_phe * detail.delta) < 1e-6:
-        return 0.0
-    # diff ~ 2 x w_phe x delta x m_θ x 5 / known
-    # 反推 m_θ ~ diff / (2 * w_phe * delta * 5)
-    estimated = diff / (2 * detail.w_phe * detail.delta * 5)
-    return min(max(estimated, 0.0), 1.0)
-
-
 def _build_overview(
     ctx: PipelineContext,
     trust_interval: Optional[TrustInterval],
@@ -198,6 +190,15 @@ def _build_overview(
     score = ctx.score.final_score if ctx.score else 0
     tier = "高置信度" if score >= 80 else "中等置信度" if score >= 60 else "低置信度"
 
+    # 归因完整度校正: 分数高只说明"没扣到分"，不等于"结论确定"。
+    # 若异常归因大量落进「其他原因」(即 D-S 的未分配质量 m(Θ))，
+    # 说明系统其实没能解释这个异常，不得显示为高置信度。
+    if trust_interval and trust_interval.avg_m_theta > 0:
+        if trust_interval.avg_m_theta >= M_THETA_LOW_TIER:
+            tier = "低置信度"
+        elif trust_interval.avg_m_theta >= M_THETA_MEDIUM_TIER and tier == "高置信度":
+            tier = "中等置信度"
+
     peers: list[PeerComparison] = []
     if ctx.benchmark:
         peers = [
@@ -205,10 +206,30 @@ def _build_overview(
             for p in ctx.benchmark.peer_companies
         ]
 
+    # 基准样本不足校正: "没有检出异常"不等于"没有异常"。同行样本退化时
+    # C 层本来就不做横向偏离判定，此时的满分只是"没算出来"，
+    # 不能当"公司没问题"读。显式挂告示，并把置信度压一级。
+    caveats: list[str] = []
+    if ctx.benchmark is None:
+        caveats.append(
+            "未获得同行基准（A2 未产出），本次未做横向偏离判定，"
+            "得分仅反映逻辑校验与年报文本层面的结果"
+        )
+    elif not ctx.benchmark.sample_sufficient:
+        n = ctx.benchmark.peer_sample_size
+        caveats.append(
+            f"同行样本不足（有效同行 {n} 家，少于 {MIN_PEER_SAMPLE} 家），"
+            f"本次未做横向偏离判定，"
+            f"得分仅反映逻辑校验与年报文本层面的结果"
+        )
+    if caveats and tier == "高置信度":
+        tier = "中等置信度"
+
     return OverallAssessment(
         score=score,
         confidence_tier=tier,
         peer_comparisons=peers,
+        caveats=caveats,
     )
 
 
@@ -314,7 +335,35 @@ def _build_explanations_llm(ctx: PipelineContext) -> Optional[str]:
     if not ctx.reasoning_results:
         return None
 
-    # 构建 LLM 输入数据结构
+    anomalies_data = _build_explanation_data(ctx)
+
+    # 调用 LLM
+    try:
+        from llm.client import LLMClient
+        client = LLMClient()
+        response = client.chat(
+            "e2_explanation",
+            {"anomalies_json": json.dumps(anomalies_data, ensure_ascii=False, indent=2)},
+        )
+        if response and str(response).strip():
+            return str(response)
+    except Exception as e:
+        logger.warning(f"E2 模块3 LLM 调用失败 (使用回退模板) : {e}")
+
+    # 回退: 结构化渲染
+    return _render_explanation_fallback(anomalies_data)
+
+
+def _build_explanation_data(ctx: PipelineContext) -> list[dict]:
+    """构建异常解释所需的结构化数据（不调 LLM，便于单测）
+
+    每个异常一条，形如::
+
+        {"indicator": ..., "source": ..., "k_value": ...,
+         "causes": [{cause, probability, footnote_id, lookup_text,
+                     lookup_page, hypo_text, hypo_source}, ...],
+         "unattributed": 未能归因的百分比}
+    """
     anomalies_data = []
     footnote_idx = 0
     for rr in ctx.reasoning_results:
@@ -322,7 +371,15 @@ def _build_explanations_llm(ctx: PipelineContext) -> Optional[str]:
         k_val = ds_meta.get("conflict_K", 0.0)
 
         causes = []
+        unattributed = 0.0
         for cause, prob in (rr.probabilities or {}).items():
+            # 「其他原因」是未分配质量 Θ 的记名桶，不是一条归因，不能当原因渲染。
+            # 旧实现把它当普通归因，还会因下面的 lookups[0]/hypotheses[0] 兜底
+            # 给它挂上一条与它无关的"证据" —— 那是凭空的引用。
+            if cause == OTHER_CAUSE:
+                unattributed += prob
+                continue
+
             footnote_idx += 1
             footnote_id = f"fn_{footnote_idx:03d}"
 
@@ -369,23 +426,12 @@ def _build_explanations_llm(ctx: PipelineContext) -> Optional[str]:
             "source": rr.anomaly_source,
             "k_value": round(k_val, 4),
             "causes": causes,
+            # 未能归因的占比（%）。>0 时该异常的解释必须说明"未能归因"，
+            # 不得让 LLM 误以为原因分布已经完整。
+            "unattributed": round(unattributed * 100, 1),
         })
 
-    # 调用 LLM
-    try:
-        from llm.client import LLMClient
-        client = LLMClient()
-        response = client.chat(
-            "e2_explanation",
-            {"anomalies_json": json.dumps(anomalies_data, ensure_ascii=False, indent=2)},
-        )
-        if response and str(response).strip():
-            return str(response)
-    except Exception as e:
-        logger.warning(f"E2 模块3 LLM 调用失败 (使用回退模板) : {e}")
-
-    # 回退: 结构化渲染
-    return _render_explanation_fallback(anomalies_data)
+    return anomalies_data
 
 
 def _render_explanation_fallback(anomalies_data: list[dict]) -> str:
@@ -399,13 +445,18 @@ def _render_explanation_fallback(anomalies_data: list[dict]) -> str:
         else:
             lines.append(f"> 证据冲突系数 K = {k} (证据一致性较高) ")
         lines.append("")
-        lines.append("原因分布: ")
-        for c in item["causes"]:
-            lines.append(f"- {c['cause']}: {c['probability']}%")
-            if c["lookup_text"]:
-                lines.append(f"  - 年报原文: {c['lookup_text'][:100]} (第{c['lookup_page']}页) [^{c['footnote_id']}]")
-            if c["hypo_text"]:
-                lines.append(f"  - 推演假设: {c['hypo_text'][:100]} (来源: {c['hypo_source']}) ")
+        if item["causes"]:
+            lines.append("原因分布: ")
+            for c in item["causes"]:
+                lines.append(f"- {c['cause']}: {c['probability']}%")
+                if c["lookup_text"]:
+                    lines.append(f"  - 年报原文: {c['lookup_text'][:100]} (第{c['lookup_page']}页) [^{c['footnote_id']}]")
+                if c["hypo_text"]:
+                    lines.append(f"  - 推演假设: {c['hypo_text'][:100]} (来源: {c['hypo_source']}) ")
+        else:
+            lines.append("原因分布: 无 —— 该异常未能归因")
+        if item.get("unattributed"):
+            lines.append(f"- 未能归因（其他原因）: {item['unattributed']}%")
         lines.append("")
     return "\n".join(lines)
 
@@ -505,6 +556,9 @@ def _render_summary_fallback(
         lines.append("")
         lines.append(f"不确定性区间: [{trust_interval.lower_bound}, {trust_interval.upper_bound}]")
         lines.append(f"平均 m(Θ)={trust_interval.avg_m_theta}，平均 K={trust_interval.avg_k}")
+    for c in (overall.caveats or []):
+        lines.append("")
+        lines.append(f"⚠️ {c}")
     return "\n".join(lines)
 
 
@@ -512,8 +566,93 @@ def _render_summary_fallback(
 # 模块5: 证据溯源
 # ════════════════════════════════════════════
 
+def _pick_by_indices(items, indices) -> Optional[object]:
+    """按 D2 给出的下标列表取第一个有效元素，取不到返回 None。
+
+    下标是 LLM 在 D2 语义合并时给的（d2_probability._llm_merge_conflict），
+    不可全信: 越界、非整数一律跳过。宁可判"没找到出处"（记成综合分析），
+    也不挂一条指错地方的引用 —— 尽调里一条假引用比承认没有引用更糟。
+    """
+    if not items or not isinstance(indices, (list, tuple)):
+        return None
+    for i in indices:
+        # bool 是 int 的子类，True 会被当成下标 1，显式排除
+        if isinstance(i, bool) or not isinstance(i, int):
+            continue
+        if 0 <= i < len(items):
+            return items[i]
+    return None
+
+
+def _locate_evidence(
+    rr, cause: str, merged_by_name: dict, footnote_id: str
+) -> Optional[EvidenceSource]:
+    """为一个归因回找 D1 的出处；找不到返回 None（由调用方记"综合分析"）。
+
+    归因名（probabilities 的键）是 D2 让 LLM 语义合并时【重新起的统一名称】，
+    与 D1 的 Explanation.summary / Hypothesis.hypothesis 不是同一套字符串。
+    所以主路径必须走下标映射 path1_indices / path2_indices；
+    名称字符串匹配只留给没有映射的历史数据作兼容回退。
+    """
+    merged = merged_by_name.get(cause) or {}
+
+    # 主路径: 按下标直接定位（路1 原文优先，其次路2 假设）
+    hit = _pick_by_indices(getattr(rr, "lookups", None), merged.get("path1_indices"))
+    if hit is not None:
+        return EvidenceSource(
+            footnote_id=footnote_id,
+            cause=cause,
+            source_type="年报原文",
+            source_text=(getattr(hit, "source_text", "") or "")[:300],
+            page_number=getattr(hit, "page_number", None),
+        )
+
+    hit = _pick_by_indices(getattr(rr, "hypotheses", None), merged.get("path2_indices"))
+    if hit is not None:
+        reasoning = (getattr(hit, "reasoning", "") or "")[:300]
+        return EvidenceSource(
+            footnote_id=footnote_id,
+            cause=cause,
+            source_type="推演假设",
+            source_text=reasoning,
+            hypothesis_reasoning=reasoning,
+        )
+
+    # 兼容回退: 旧数据没带下标映射，只能按名称匹配（命中率很低）
+    for lk in (getattr(rr, "lookups", None) or []):
+        summary = getattr(lk, "summary", "") or ""
+        if summary and (summary in cause or cause in summary):
+            return EvidenceSource(
+                footnote_id=footnote_id,
+                cause=cause,
+                source_type="年报原文",
+                source_text=(getattr(lk, "source_text", "") or "")[:300],
+                page_number=getattr(lk, "page_number", None),
+            )
+
+    for h in (getattr(rr, "hypotheses", None) or []):
+        hypo = getattr(h, "hypothesis", "") or ""
+        if hypo and (hypo in cause or cause in hypo):
+            reasoning = (getattr(h, "reasoning", "") or "")[:300]
+            return EvidenceSource(
+                footnote_id=footnote_id,
+                cause=cause,
+                source_type="推演假设",
+                source_text=reasoning,
+                hypothesis_reasoning=reasoning,
+            )
+
+    return None
+
+
 def _build_evidence_sources(ctx: PipelineContext) -> list[EvidenceSource]:
-    """从 D1/D2 层数据构建证据溯源列表"""
+    """从 D1/D2 层数据构建证据溯源列表
+
+    曾用【归因名】去和 D1 的原文摘要做子串匹配来反推出处。但归因名是 D2 让
+    LLM 语义合并时重新起的（见 d2_probability._llm_merge_conflict），两套命名
+    体系对不上 —— 实测苏美达 29 条归因 29 条落空，证据全退化成系统自造的
+    "综合分析"，可核验率恒为 0%。改走 D2 给出的下标映射。
+    """
     sources: list[EvidenceSource] = []
     footnote_idx = 0
 
@@ -521,49 +660,31 @@ def _build_evidence_sources(ctx: PipelineContext) -> list[EvidenceSource]:
         return sources
 
     for rr in ctx.reasoning_results:
+        merged_by_name = {
+            m["name"]: m
+            for m in ((getattr(rr, "ds_metadata", None) or {}).get("merged_causes") or [])
+            if isinstance(m, dict) and m.get("name")
+        }
+
         for cause in (rr.probabilities or {}).keys():
+            # 「其他原因」是 D-S 未分配质量 Θ 的记名，不是一条归因，不进证据列表
+            if cause == OTHER_CAUSE:
+                continue
+
             footnote_idx += 1
             footnote_id = f"fn_{footnote_idx:03d}"
 
-            # 路1证据
-            found_lookup = False
-            if rr.lookups:
-                for lk in rr.lookups:
-                    summary = getattr(lk, "summary", "")
-                    if summary and (summary in cause or cause in summary):
-                        sources.append(EvidenceSource(
-                            footnote_id=footnote_id,
-                            cause=cause,
-                            source_type="年报原文",
-                            source_text=getattr(lk, "source_text", "")[:300],
-                            page_number=getattr(lk, "page_number", None),
-                        ))
-                        found_lookup = True
-                        break
+            source = _locate_evidence(rr, cause, merged_by_name, footnote_id)
 
-            # 路2假设 (如果路1没找到匹配) 
-            if not found_lookup and rr.hypotheses:
-                for h in rr.hypotheses:
-                    hypo = getattr(h, "hypothesis", "")
-                    if hypo and (hypo in cause or cause in hypo):
-                        sources.append(EvidenceSource(
-                            footnote_id=footnote_id,
-                            cause=cause,
-                            source_type="推演假设",
-                            source_text=getattr(h, "reasoning", "")[:300],
-                            hypothesis_reasoning=getattr(h, "reasoning", "")[:300],
-                        ))
-                        found_lookup = True
-                        break
-
-            # 保底
-            if not found_lookup:
-                sources.append(EvidenceSource(
+            # 保底: 确实定位不到出处，就如实记成系统综合判断，不编造引用
+            if source is None:
+                source = EvidenceSource(
                     footnote_id=footnote_id,
                     cause=cause,
                     source_type="综合分析",
                     source_text="D-S 证据理论合成结果",
-                ))
+                )
+            sources.append(source)
 
     return sources
 
@@ -652,6 +773,10 @@ def render_to_markdown(report: Report, ctx: PipelineContext | None = None) -> st
         lines.append(f"- 平均 K (证据冲突系数) ={ti.avg_k}")
     else:
         lines.append(f"**评级**: {assessment.confidence_tier}")
+
+    for c in (assessment.caveats or []):
+        lines.append("")
+        lines.append(f"> ⚠️ **{c}**")
 
     if assessment.peer_comparisons:
         lines.append("")
@@ -810,7 +935,10 @@ def _render_business_overview_md(report: Report, ctx: PipelineContext | None = N
 
     # ── 行业 ──
     if peers:
-        lines.append(f"**可比行业组**: {'、'.join(p.name for p in peers[:5])} 等 {len(peers)} 家企业")
+        # 注意: 这里是 PeerComparison (字段 company_name)，不是 A 层的
+        # benchmark.peer_companies (字段 name)。写错会让整个 Markdown 报告
+        # 渲染失败（异常被上层吞成"非阻断"，只留一行 WARNING）。
+        lines.append(f"**可比行业组**: {'、'.join(p.company_name for p in peers[:5])} 等 {len(peers)} 家企业")
         lines.append("")
 
     # ── 财务健康 ──
@@ -826,6 +954,14 @@ def _render_business_overview_md(report: Report, ctx: PipelineContext | None = N
     c_count = sum(1 for a in anomalies if a.source == "C")
     lines.append(f"| 异常指标 | C层 {c_count} 项, B+层 {bplus_count} 项 |")
     lines.append("")
+
+    # 前提不满足的告示放在结论紧后面 —— "0 项异常"必须紧挨着
+    # "为什么这次可能检不出异常"，否则会被读成"公司各项指标都正常"
+    caveats = assessment.caveats if assessment else []
+    for c in caveats:
+        lines.append(f"> ⚠️ **{c}**")
+    if caveats:
+        lines.append("")
 
     if final_score >= 90:
         health = "优秀 — 财务稳健"

@@ -1,8 +1,8 @@
 """A2层: 财务数字画像匹配同行——纯代码向量相似度
 
-职责: 
-- 从同花顺行业分类 CSV 获取二级行业同行池
-- 通过 akshare 在线获取同行财务数据 (内存缓存，不落盘) 
+职责:
+- 从申万行业分类 CSV 获取同行池 (层级自适应: 三级 > 二级 > 一级)
+- 通过 akshare 在线获取同行财务数据 (内存缓存，不落盘)
 - 5 年财务数据 -> 稳健标准化 -> 逐维中位数合并 -> 6 维连续值向量
 - 余弦相似度排序 -> Top 5 (E层展示) + Top 20% (C层MAD基准) 
 
@@ -22,14 +22,19 @@ from pathlib import Path
 from typing import Optional
 
 from schemas.tags import CompanyTags, FinancialProfile, FINANCIAL_DIMENSIONS
-from schemas.benchmark import Benchmark, PeerCompany, IndustryProfile
+from schemas.benchmark import (
+    Benchmark,
+    PeerCompany,
+    IndustryProfile,
+    MIN_PEER_SAMPLE,
+)
 
 logger = logging.getLogger(__name__)
 
 # ────────────────────────────────────────────
 # 路径常量
 # ────────────────────────────────────────────
-_INDUSTRY_CSV_PATH = Path("data/industry/thf_industry_classification.csv")
+_INDUSTRY_CSV_PATH = Path("data/industry/sw_industry_classification.csv")
 
 # 6 维特征顺序 (与 FINANCIAL_DIMENSIONS 一致)
 _DIMENSION_NAMES = FINANCIAL_DIMENSIONS  # 用全局统一顺序
@@ -108,20 +113,34 @@ def run_matching(tags: CompanyTags) -> tuple[Benchmark, dict, dict]:
     stock_code = tags.stock_code
     company_name = tags.company_name
 
-    # 从硬标签提取二级行业
-    industry_name = _extract_industry_level2(tags.hard_tags)
+    # 从硬标签里挑最具体的可用层级, 用那一级圈同行池
+    tag_system, pool_column, industry_name = _pick_pool_level(tags.hard_tags)
     if not industry_name:
-        logger.warning("无法确定二级行业，返回空基准")
+        logger.warning("硬标签里没有任何行业层级，返回空基准")
         return _empty_benchmark(tags)
 
+    logger.info(f"同行池层级: {tag_system} = {industry_name}")
+
     # 获取同行池
-    peers = _load_peer_pool(industry_name)
+    peers = _load_peer_pool(pool_column, industry_name)
     if not peers:
         logger.warning(f"行业 [{industry_name}] 在 CSV 中无数据")
         return _empty_benchmark(tags, industry_name)
 
+    # 同行池必须剔除目标公司自身 —— 否则是拿自己当自己的基准。
+    # CSV 里目标公司本来就属于它自己的二级行业，不剔除就一定会自比。
+    # 极端情形（行业表只有目标公司一行）下池子会退化成 [自己]，
+    # 于是中位数 = 自己、MAD = 0、"偏离" 变成 inf，全部指标判 extreme。
+    target_norm = stock_code.split(".")[0].strip()
+    peers = [p for p in peers if p["code"].split(".")[0].strip() != target_norm]
+    if not peers:
+        logger.warning(
+            f"行业 [{industry_name}] 剔除目标公司自身后无其他同行，样本不足"
+        )
+        return _empty_benchmark(tags, industry_name)
+
     peer_count = len(peers)
-    logger.info(f"行业 [{industry_name}] 共 {peer_count} 家同行")
+    logger.info(f"行业 [{industry_name}] 共 {peer_count} 家同行 (已排除目标公司自身)")
 
     # ── Phase 1: 拉取全部原始数据 ──
     raw_data = _fetch_all_financial_data(stock_code, peers)
@@ -130,8 +149,13 @@ def run_matching(tags: CompanyTags) -> tuple[Benchmark, dict, dict]:
         return _empty_benchmark(tags, industry_name)
 
     # ── Phase 2: 计算标准化统计量 ──
+    # 只用【同行】的样本算标准化参数，目标公司不参与。
+    # 把目标公司算进去，等于让它划定自己要被衡量的尺子 —— 池子越小
+    # 这个影响越大，池子里只剩它自己时它会正好落在中心，向量退化成全 0。
     all_values: list[list[float]] = []
     for code, year_data in raw_data.items():
+        if code.split(".")[0].strip() == target_norm:
+            continue
         for yr in year_data:
             raw_vec = _extract_raw_values(yr)
             if raw_vec is not None:
@@ -158,16 +182,25 @@ def run_matching(tags: CompanyTags) -> tuple[Benchmark, dict, dict]:
     # ── Phase 5: 余弦相似度排序 ──
     scored = _cosine_rank(target_vec, peer_vectors)
 
-    # 双池
+    # 双池。分母用【真有数据的】同行数，不是 CSV 里的行业规模 ——
+    # CSV 有 100 家、只拉到 3 家数据时，按 100 算池子大小是虚的。
+    n_scored = len(scored)
     top5 = scored[:5]
-    mad_size = max(math.ceil(peer_count * _TOP_PERCENT), _PEER_COUNT_MIN)
+    mad_size = max(math.ceil(n_scored * _TOP_PERCENT), _PEER_COUNT_MIN)
     mad_pool = scored[:mad_size]
-    if peer_count < 10:
+    if n_scored < 10:
         mad_pool = top5
 
     # 横向基准
     peer_median = _calc_peer_median(mad_pool)
-    logger.info(f"MAD 基准池 {len(mad_pool)} 家")
+    sample_sufficient = n_scored >= MIN_PEER_SAMPLE
+    if sample_sufficient:
+        logger.info(f"MAD 基准池 {len(mad_pool)} 家 (有效同行 {n_scored} 家)")
+    else:
+        logger.warning(
+            f"有效同行仅 {n_scored} 家 (< {MIN_PEER_SAMPLE})，"
+            f"基准样本不足，偏离判定不可信"
+        )
 
     # ── Phase 6: 切片多年原始数据 (供 E2 图表使用) ──
     multi_year_data: dict[str, list[dict]] = {}
@@ -182,10 +215,12 @@ def run_matching(tags: CompanyTags) -> tuple[Benchmark, dict, dict]:
     return Benchmark(
         industry=IndustryProfile(
             industry_name=industry_name,
-            hard_tag_system="同花顺二级行业",
+            hard_tag_system=tag_system,
         ),
         peer_median=peer_median,
         historical_mean={},
+        peer_sample_size=n_scored,
+        sample_sufficient=sample_sufficient,
         peer_companies=[
             PeerCompany(
                 name=p["name"],
@@ -226,9 +261,9 @@ def _load_industry_csv():
         code_norm = code.split(".")[0]
         entry = {
             "code": code, "name": row["股票简称"].strip(),
-            "level1": row["所属同花顺一级行业"].strip(),
-            "level2": row["所属同花顺二级行业"].strip(),
-            "level3": row["所属同花顺三级行业"].strip(),
+            "level1": row["所属申万一级行业"].strip(),
+            "level2": row["所属申万二级行业"].strip(),
+            "level3": row["所属申万三级行业"].strip(),
         }
         cache[code_norm] = cache[code] = entry
         rows.append(entry)
@@ -237,32 +272,39 @@ def _load_industry_csv():
     logger.info(f"A2 加载行业 CSV: {len(rows)} 只股票")
 
 
-def _extract_industry_level2(hard_tags) -> str:
-    """从硬标签中提取二级行业"""
-    for ht in hard_tags:
-        if ht.system == "同花顺二级行业" and ht.value:
-            return ht.value
-    for ht in hard_tags:
-        if ht.system == "同花顺三级行业" and ht.value:
-            return _resolve_level2(ht.value)
-    return ""
+# 由细到粗。挑同行池层级时按这个顺序找第一个可用的。
+# 顺序不能改成"由粗到细": 那样永远不会用到三级分类, 同行池会一直停留在
+# 一级行业这种过宽的粒度上。
+_LEVEL_CHOICES = (
+    ("申万三级行业", "level3"),
+    ("申万二级行业", "level2"),
+    ("申万一级行业", "level1"),
+)
 
 
-def _resolve_level2(level3: str) -> str:
+def _pick_pool_level(hard_tags) -> tuple[str, str, str]:
+    """从硬标签里挑最具体的可用行业层级。
+
+    返回 (标签体系名, CSV 列名, 行业值); 一个都没有时返回三个空串。
+
+    迁移后的行业表里 5606/5615 家公司三级齐全, 少数只有二级或一级。
+    旧代码只认「二级」一个 system 名, 拿不到就直接返回空基准 ——
+    对一家只有一级行业的公司, 横向对比会整个消失。
+    """
+    for system, column in _LEVEL_CHOICES:
+        for ht in hard_tags:
+            value = (ht.value or "").strip()
+            if ht.system == system and value:
+                return system, column, value
+    return "", "", ""
+
+
+def _load_peer_pool(column: str, value: str) -> list[dict]:
+    """加载同一行业层级下(指定列等于指定值)的所有公司"""
     _load_industry_csv()
-    if _INDUSTRY_LIST:
-        for row in _INDUSTRY_LIST:
-            if row["level3"] == level3:
-                return row["level2"]
-    return ""
-
-
-def _load_peer_pool(industry_level2: str) -> list[dict]:
-    """加载同一二级行业的所有公司"""
-    _load_industry_csv()
-    if not _INDUSTRY_LIST:
+    if not _INDUSTRY_LIST or not column or not value:
         return []
-    return [row for row in _INDUSTRY_LIST if row["level2"] == industry_level2]
+    return [row for row in _INDUSTRY_LIST if row.get(column) == value]
 
 
 # ────────────────────────────────────────────
@@ -607,12 +649,18 @@ def _calc_peer_median(peers: list[dict]) -> dict[str, float]:
 
 
 def _empty_benchmark(tags: CompanyTags, industry: str = "") -> tuple[Benchmark, dict, dict]:
-    """返回空基准 + 空多年数据 (保持与 run_matching 相同的返回签名) """
-    name = industry or _extract_industry_level2(tags.hard_tags) or "未知行业"
+    """返回空基准 + 空多年数据 (保持与 run_matching 相同的返回签名)
+
+    空基准一律显式标成"样本不足"，下游据此拒绝做偏离判定，
+    而不是把"没有同行可比"渲染成"公司各项指标都正常"。
+    """
+    tag_system, _column, picked = _pick_pool_level(tags.hard_tags)
+    name = industry or picked or "未知行业"
     return (
         Benchmark(
-            industry=IndustryProfile(industry_name=name, hard_tag_system="同花顺二级行业"),
+            industry=IndustryProfile(industry_name=name, hard_tag_system=tag_system),
             peer_median={}, historical_mean={}, peer_companies=[],
+            peer_sample_size=0, sample_sufficient=False,
         ),
         {},
         {},

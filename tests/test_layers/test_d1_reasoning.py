@@ -271,13 +271,13 @@ class TestPath2Hypothesis:
             company_name="茅台",
             stock_code="600519",
             hard_tags=[
-                HardTag(system="同花顺三级行业", value="白酒"),
-                HardTag(system="同花顺二级行业", value="饮料制造"),
+                HardTag(system="申万三级行业", value="白酒Ⅲ"),
+                HardTag(system="申万二级行业", value="白酒Ⅱ"),
             ],
         )
         result = _format_industry_tags(tags)
-        assert "白酒" in result
-        assert "饮料制造" in result
+        assert "申万三级行业: 白酒Ⅲ" in result
+        assert "申万二级行业: 白酒Ⅱ" in result
 
     def test_format_industry_tags_empty(self):
         """空标签时返回默认提示"""

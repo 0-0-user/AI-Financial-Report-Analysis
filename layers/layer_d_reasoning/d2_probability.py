@@ -519,7 +519,9 @@ def _pignistic_transform(mass_final: dict[str, float]) -> dict[str, float]:
     probs: dict[str, float] = {}
     for name, mass in mass_final.items():
         if name == "Θ":
-            probs["其他原因"] = round(mass, 4)
+            # 累加而非赋值: 若 D1 的 LLM 恰好把某条假设命名成「其他原因」，
+            # 它会与 Θ 撞同一个桶，赋值会让其中一方的质量凭空消失。
+            probs["其他原因"] = round(probs.get("其他原因", 0.0) + mass, 4)
         else:
             probs[name] = round(mass, 4)
 
@@ -549,8 +551,14 @@ def _build_ds_metadata(
     for cause in merged_causes:
         merged_summary.append({
             "name": cause["name"],
+            # from_path1/2 是给人和旧代码看的布尔摘要；下标本身也必须留下 ——
+            # 归因名是 LLM 语义合并时【重起】的，下游 E2 证据溯源只有靠下标
+            # 才能回到 D1 的原文出处。曾只存 bool()，把映射压没了，
+            # 逼得 E2 改用名称匹配回找，实测 29/29 全落空、证据全变自造来源。
             "from_path1": bool(cause["path1_indices"]),
             "from_path2": bool(cause["path2_indices"]),
+            "path1_indices": list(cause.get("path1_indices") or []),
+            "path2_indices": list(cause.get("path2_indices") or []),
             "conflicts_with": cause.get("conflicts_with", []),
         })
 

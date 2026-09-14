@@ -235,6 +235,128 @@ def _detect_report_type(text: str) -> str:
 # LLM 路径
 # ═══════════════════════════════════════════════
 
+def _column_texts(header_info: dict) -> list[list[str]]:
+    """每一列表头行里出现过的文字 (按列号, 去重保序)。
+
+    提示词 grounding (_describe_columns) 和语义识别 (_column_headers)
+    都要这份东西 —— 两边各写一遍的话, 改了一处漏另一处,
+    提示词说的和守卫认的就对不上了。
+    """
+    header_rows = header_info.get("header_rows") or []
+    n_cols = max((len(r.columns) for r in header_rows), default=0)
+    out: list[list[str]] = []
+    for j in range(n_cols):
+        parts: list[str] = []
+        for r in header_rows:
+            text = str(r.columns.get(f"col_{j}", "")).strip()
+            if text and text not in parts:
+                parts.append(text)
+        out.append(parts)
+    return out
+
+
+def _describe_columns(header_info: dict) -> str:
+    """把 col_j 和它上方表头行的文字绑成对照表，供提示词使用。
+
+    LLM 拿到一张表时无从知道 col_0 是科目名列、col_1 才是数值列。
+    不写这段，col_index 就只能靠猜 —— 实测同一提示词重复跑会在 0 和 1
+    之间跳，而指到 col_0（科目名列）会让 `_parse_number` 返回 None，
+    字段被 B1 静默丢弃。
+    """
+    return "\n".join(
+        f"  col_{j} = " + " / ".join(parts)
+        for j, parts in enumerate(_column_texts(header_info)) if parts
+    )
+
+
+def _period_standard_name(header_texts: list[str]) -> str:
+    """列头文字 -> 期间标准名 (end_balance / begin_balance / ...); 认不出返回空串。
+
+    按别名长度**倒序**匹配 —— "期末余额" 必须比 "期末" 先命中, 否则更具体的
+    别名永远轮不到。
+    """
+    for alias in sorted(COLUMN_ALIASES, key=len, reverse=True):
+        if any(alias in t for t in header_texts):
+            return COLUMN_ALIASES[alias]
+    return ""
+
+
+# 列头里的日期: "2025年12月31日" / "2025年度" / "2025年12月"
+_HEADER_DATE_RE = re.compile(
+    r"((?:19|20)\d{2})\s*年(?:\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*日)?)?")
+
+
+def _header_date(header_texts: list[str]) -> Optional[tuple[int, int, int]]:
+    """列头文字里的日期, 归一成可比较的 (年, 月, 日); 认不出返回 None。
+
+    "2025年12月31日" -> (2025, 12, 31)
+    "2025年度"       -> (2025, 0, 0)   —— 期间型表头, 没有月日
+    """
+    for t in header_texts:
+        m = _HEADER_DATE_RE.search(t)
+        if m:
+            return (int(m.group(1)), int(m.group(2) or 0), int(m.group(3) or 0))
+    return None
+
+
+def _date_period_names(table_name: str) -> tuple[str, str]:
+    """日期列头下的 (本期, 上期) 标准名。
+
+    资产负债表是**时点**, 利润表/现金流量表是**期间** —— 名字分开,
+    下游读语义时不会失真。两者的上期名都算上期列 (见 b1 的
+    _PRIOR_PERIOD_STANDARD_NAMES), 所以守卫对两张表都管用。
+    """
+    if "资产负债表" in table_name:
+        return "end_balance", "begin_balance"
+    return "current_amount", "prior_amount"
+
+
+def _column_headers(
+    header_info: dict, table_name: str = "",
+) -> list[ColumnHeader]:
+    """给每一列建 ColumnHeader, 带上**真实列号**和期间语义。
+
+    旧写法把 index 一律填 0、standard_name 填成占位的 value_i, 下游于是
+    无从校验 LLM 给的 col_index —— 指到「期初余额」列时那一列**确实**
+    解析得出数, 会被照单全收, 静默把期初当期末。
+
+    期间语义直接读表头文字, **不经过 LLM**: 这是表头上明摆着的字,
+    没必要让模型再猜一遍。
+
+    两条识别路径, 缺一不可:
+
+      1. 别名 —— "期末余额/期初余额/本期金额".
+      2. **日期排名** —— "2025年12月31日 / 2024年12月31日".
+         真实年报基本只有这一条: 苏美达五张核心报表的列头全是日期,
+         一个"期末"字样都没有。只做 (1) 的话, standard_name 全空,
+         _prior_period_columns 恒为空集, 整个期间守卫**静默失效** ——
+         不报错, 只是永远放行。
+    """
+    per_col = _column_texts(header_info)
+
+    names = [_period_standard_name(t) for t in per_col]
+
+    # 别名认不出两列以上时, 改用列头日期排名: 最新的 = 本期。
+    if sum(1 for n in names if n) < 2:
+        dated = [(j, d) for j, t in enumerate(per_col)
+                 if (d := _header_date(t)) is not None]
+        if len(dated) >= 2:
+            latest = max(d for _j, d in dated)
+            current, prior = _date_period_names(table_name)
+            for j, d in dated:
+                if not names[j]:
+                    names[j] = current if d == latest else prior
+
+    return [
+        ColumnHeader(
+            index=j,
+            raw_text=" / ".join(per_col[j]),
+            standard_name=names[j],
+        )
+        for j in range(len(per_col))
+    ]
+
+
 def _llm_guide(
     table_name: str, header_info: dict,
     all_rows: list[RawTableRow], is_row_major: bool,
@@ -243,32 +365,43 @@ def _llm_guide(
     client = LLMClient()
 
     # 提取全部唯一原始字段名 (从 col_0，表头之后) ，让 LLM 做标准名映射
-    # 最多 50 个字段，覆盖三大报表全部关键行；超过会导致 LLM 输出被截断
-    sample_field_names = []
+    # 最多 100 个字段，覆盖三大报表全部关键行；超过会导致 LLM 输出被截断。
+    # 带上 row.row_index（真下标）而不是 1-based 序号 —— LLM 要回填的
+    # row_start 就是它，给它别的等于让它猜（见 _describe_columns 的说明）。
+    sample_fields: list[tuple[int, str]] = []
+    seen: set[str] = set()
     for row in all_rows[header_info["data_start_row"]:]:
         raw_name = str(row.columns.get("col_0", "")).strip()
-        if raw_name and raw_name not in sample_field_names:
-            sample_field_names.append(raw_name)
-        if len(sample_field_names) >= 100:
+        if raw_name and raw_name not in seen:
+            seen.add(raw_name)
+            sample_fields.append((row.row_index, raw_name))
+        if len(sample_fields) >= 100:
             break
+
+    col_legend = _describe_columns(header_info)
+    field_lines = "\n".join(f"  行{idx}: {name}" for idx, name in sample_fields)
 
     response = client.chat(
         "b0_semantic_guide",
         {
-            "table_headers": f"报表: {table_name}\n布局: {header_info['layout']}\n{header_info['header_text']}\n\n"
-                             f"原始字段名列表 (前{len(sample_field_names)}个) :\n" +
-                             "\n".join(f"  {i+1}. {name}" for i, name in enumerate(sample_field_names))
+            "table_headers": (
+                f"报表: {table_name}\n布局: {header_info['layout']}\n"
+                f"{header_info['header_text']}\n\n"
+                f"列编号对照 (0-based) :\n{col_legend}\n\n"
+                f"字段清单 (行号 | 字段名) ，共{len(sample_fields)}个。\n"
+                f"row_start 请原样回填下面每行的**行号**，"
+                f"它不是字段在清单里的第几个：\n{field_lines}"
+            )
         },
         temperature=0.0,
         max_tokens=16384,
     )
     data = _parse_llm_response(str(response) if not isinstance(response, str) else response)
 
-    columns = []
-    raw_cols = data.get("columns", {})
-    if isinstance(raw_cols, dict):
-        for k, v in raw_cols.items():
-            columns.append(ColumnHeader(index=0, raw_text=str(k), standard_name=str(v)))
+    # 列语义直接从表头文字读 (见 _column_headers) —— 不再取 LLM 的 columns:
+    # 它按列名而不是列号给, 落不到 col_j 上, 旧写法只能一律填 index=0,
+    # 等于把列号信息扔了。
+    columns = _column_headers(header_info, table_name)
 
     field_mappings = []
     for fm in data.get("field_mapping", []):
@@ -366,8 +499,7 @@ def _rule_based_guide(
                         unit=header_info["unit"]))
                     break
 
-    columns = [ColumnHeader(index=vc, raw_text=f"val{i}", standard_name=f"value_{i}")
-               for i, vc in enumerate(value_cols)]
+    columns = _column_headers(header_info, table_name)
     return TableGuide(table_name=table_name, report_type=header_info["report_type"],
         overall_unit=header_info["unit"], columns=columns, field_mappings=field_mappings,
         layout=header_info["layout"])

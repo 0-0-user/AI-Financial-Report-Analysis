@@ -3,8 +3,8 @@
  schemas/tags.py — A层输出: 硬标签 + 财务数字画像
 ==========================================================
 
-A1 层输出两类信息: 
-1. 硬标签 (HardTag) : 同花顺三级行业分类 (客观事实) 
+A1 层输出两类信息:
+1. 硬标签 (HardTag) : 申万行业分类 (客观事实)
 2. 财务数字画像 (FinancialProfile) : 6 维特征连续值 (从 akshare 计算) 
 
 数据流向: 
@@ -17,7 +17,18 @@ FinancialProfile 存储的是经稳健标准化后的连续值，直接用于余
 from pydantic import BaseModel
 
 
-# 6 维度顺序 (全局统一) 
+# 申万给同名但不同层级的行业节点加罗马数字后缀来区分 (中药 / 中药Ⅱ / 中药Ⅲ,
+# 贸易 / 贸易Ⅱ / 贸易Ⅲ)。行业分类的生产方 (建表脚本) 和消费方 (B+ 查阈值表)
+# 都要处理这个后缀, 所以常量放在这里共用, 避免各写一份后慢慢漂移。
+ROMAN_LEVEL_SUFFIXES = "ⅠⅡⅢⅣⅤ"
+
+
+def strip_level_suffix(name: str) -> str:
+    """剥掉结尾的罗马数字分级后缀: 其他建材Ⅲ -> 其他建材"""
+    return name.rstrip(ROMAN_LEVEL_SUFFIXES)
+
+
+# 6 维度顺序 (全局统一)
 FINANCIAL_DIMENSIONS: list[str] = [
     "毛利率水平",
     "净利率水平",
@@ -29,8 +40,12 @@ FINANCIAL_DIMENSIONS: list[str] = [
 
 
 class HardTag(BaseModel):
-    """硬标签: 同花顺三级行业分类"""
-    system: str = "同花顺三级行业"
+    """硬标签: 申万行业分类 (一级/二级/三级)
+
+    数据源是申万 (cninfo 的申银万国行业分类标准), 不是同花顺 ——
+    system 必须说实话, 下游按 system 名取值的代码全都依赖它。
+    """
+    system: str = "申万三级行业"
     value: str
 
 

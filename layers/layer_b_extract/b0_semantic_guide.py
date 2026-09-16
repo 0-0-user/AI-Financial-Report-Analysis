@@ -492,8 +492,15 @@ def _rule_based_guide(
                 unit=header_info["unit"]))
             matched = True
         if not matched:
+            # 只认**单向**: 科目名里含别名 (variant in col0)。
+            # 反向的 `col0 in variant` 会让短科目名被长别名吸走 ——
+            # 科目名「营业收入」落进别名「上期营业收入」, 于是本期营收被
+            # 配到上期字段上, 算出来的同比恒为 0。
+            # 这一层仍是**声明顺序优先**(先命中的 variant 胜): 别名互相
+            # 包含时, 只有"更具体的那个先声明"才配对。要根治得改成
+            # "最长别名优先", 本轮没做 (见提交说明)。
             for variant, std_name in idx.items():
-                if variant in col0 or col0 in variant:
+                if variant in col0:
                     field_mappings.append(FieldMapping(raw_name=variant, standard_name=std_name,
                         row_index=row.row_index, col_index=value_cols[0] if value_cols else 1,
                         unit=header_info["unit"]))

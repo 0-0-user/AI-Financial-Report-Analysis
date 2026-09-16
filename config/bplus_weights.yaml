@@ -1,0 +1,42 @@
+# B+ 层自己的权重表
+#
+# 为什么不是 config/weights.yaml:
+#   那张表的 28 个 key 全是**财务比率名** (存货周转率/毛利率/...), 与 B+ 的检查名
+#   (`利润含金量异常`/`资金结构异常`/...) **零交集**, 且全仓 .py 里零引用
+#   (只有 `category` 被 deviation_scorer.py 读, 而那个文件没有调用点)。
+#   与其把两套语义硬接在一起, 不如让 B+ 有自己的表。
+#
+# 语义:
+#   severity_final = clamp(raw_severity * base_weight, 0.0, amplification_cap)
+#
+#   raw_severity     —— 由 calc_severity 里各自的**曲线**算出 (分界点与斜率不动),
+#                       曲线内部原来的硬编码上限 5.0 换成该检查自己的
+#                       amplification_cap
+#   base_weight      —— 曲线输出之后的加权; 让"扣分力度"与"形状"解耦:
+#                       两条曲线的 raw 恰好相同 (如 过度扩张嫌疑 与 利润含金量异常
+#                       都到 raw=5.0) 时, E1 拿到的 W_phe 不再完全一样
+#   amplification_cap—— 单条检查的扣分天花板 (E1 直接拿 severity 当 W_phe)
+#
+# direction:
+#   **本轮只作配置断言与文档, 不参与行为。** B+ 目前只有"负向"检查 —— 指标值越糟,
+#   severity 越高, 故 raw x base_weight 后钳下界 0 是安全的。
+#   ⚠️ 将来加**正向**检查 (值越大越好) 时, 必须让 direction 参与行为
+#   (至少是反向曲线 / 反向加权), **别只改这里的注释** —— 否则一条正向的好指标
+#   会照着负向的语义被扣分。
+#
+# 覆盖范围提醒:
+#   本表只覆盖 **logic_checks.py 的 calc_severity 曲线** + `内控体系`。
+#   fraud_patterns.py 产出的检查名 (毛利率异常/应收增速异常/M-Score盈余操纵/...)
+#   不在本表内 —— 按 calc_severity 的契约, 未配置的名字**保持旧行为**并记 warning
+#   (「没配置」不等于「不扣分」)。
+version: 1
+
+checks:
+  利润含金量异常: {category: "现金流质量", base_weight: 2.0, direction: "negative", amplification_cap: 5.0}
+  资金结构异常:   {category: "资金管控",   base_weight: 1.5, direction: "negative", amplification_cap: 5.0}
+  资金管控异常:   {category: "资金管控",   base_weight: 1.5, direction: "negative", amplification_cap: 5.0}
+  过度扩张嫌疑:   {category: "成长能力",   base_weight: 1.0, direction: "negative", amplification_cap: 4.0}
+  过度投资风险:   {category: "成长能力",   base_weight: 1.0, direction: "negative", amplification_cap: 4.0}
+  民企扩张风险:   {category: "成长能力",   base_weight: 1.0, direction: "negative", amplification_cap: 4.0}
+  销售现金背离:   {category: "现金流质量", base_weight: 1.5, direction: "negative", amplification_cap: 4.0}
+  内控体系:       {category: "内控",       base_weight: 1.0, direction: "negative", amplification_cap: 3.0}

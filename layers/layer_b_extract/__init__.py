@@ -17,7 +17,7 @@ def run(ctx: PipelineContext) -> None:
     n_fields = sum(len(t.field_mappings) for t in guide.tables)
     tracer.milestone("B0", "表头映射", "success", f"识别 {n_tables} 张报表, {n_fields} 个字段映射")
 
-    financials, parent_financials = run_extraction(ctx.raw_doc, guide)
+    financials, parent_financials, prior_financials = run_extraction(ctx.raw_doc, guide)
     tracer.milestone(
         "B1", "数值提取", "success",
         f"合并: 资产负债表 {len(financials.balance_sheet)} 字段, 利润表 {len(financials.income_statement)} 字段, 现金流 {len(financials.cashflow)} 字段",
@@ -27,6 +27,7 @@ def run(ctx: PipelineContext) -> None:
 
     ctx.financials = financials
     ctx.parent_financials = parent_financials
+    ctx.prior_financials = prior_financials
     ctx.validation_passed = validation.is_valid
 
     if not validation.is_valid:

@@ -24,7 +24,17 @@ logger = logging.getLogger(__name__)
 
 THRESHOLDS_PATH = Path("config/thresholds.yaml")
 INDUSTRY_THRESHOLDS_PATH = Path("config/industry_thresholds.yaml")
-_INDUSTRY_CACHE: dict | None = None
+BPLUS_WEIGHTS_PATH = Path("config/bplus_weights.yaml")
+
+# 允许的 direction 取值。见 bplus_weights.yaml 顶部: 本轮 direction 只作配置断言,
+# 不参与行为 —— B+ 目前只有负向检查。
+_DIRECTIONS = ("negative", "positive")
+_REQUIRED_FIELDS = ("category", "base_weight", "direction", "amplification_cap")
+# 整份 industry_thresholds.yaml 的缓存 (含顶层 industries 与 fallback 两个键)。
+# 只缓存 `industries` 子字典的做法会让顶层 fallback 永远读不到 —— 见下方注释。
+_INDUSTRY_DOC_CACHE: dict | None = None
+# config/bplus_weights.yaml 的整份文档缓存
+_BPLUS_WEIGHTS_DOC_CACHE: dict | None = None
 
 
 # ═══════════════════════════════════════════════
@@ -38,16 +48,38 @@ def _load_thresholds() -> dict:
         return yaml.safe_load(f)
 
 
-def _load_industry_table() -> dict:
-    """行业阈值表: {行业名: {阈值...}}"""
-    global _INDUSTRY_CACHE
-    if _INDUSTRY_CACHE is None:
+def _load_industry_doc() -> dict:
+    """industry_thresholds.yaml 的整份文档, 只读一次。
+
+    顶层有两个键, 缺一不可:
+      - `industries`: {行业名: {阈值...}}
+      - `fallback`:   市场基准 {阈值...} —— 行业没覆盖时用
+    之前这里缓存的是 `industries` 子字典, 顶层 fallback 在加载时就被丢掉了,
+    于是 `_load_industry_thresholds` 只能退回 `{}`。**不要**把缓存退回成
+    子字典: 那样 fallback 又会丢, 整个缺陷会原样复现。
+    """
+    global _INDUSTRY_DOC_CACHE
+    if _INDUSTRY_DOC_CACHE is None:
         if not INDUSTRY_THRESHOLDS_PATH.exists():
-            _INDUSTRY_CACHE = {}
+            _INDUSTRY_DOC_CACHE = {}
         else:
             with open(INDUSTRY_THRESHOLDS_PATH, encoding="utf-8") as f:
-                _INDUSTRY_CACHE = yaml.safe_load(f).get("industries", {})
-    return _INDUSTRY_CACHE
+                _INDUSTRY_DOC_CACHE = yaml.safe_load(f) or {}
+    return _INDUSTRY_DOC_CACHE
+
+
+def _load_industry_table() -> dict:
+    """行业阈值表: {行业名: {阈值...}} —— 不含顶层 fallback。
+
+    `resolve_industry_key` 与 `_load_industry_thresholds` 都按
+    「行业名 -> 配置」当 dict 用它, 所以这里保持原语义不变。
+    """
+    return _load_industry_doc().get("industries", {})
+
+
+def _load_industry_fallback() -> dict:
+    """顶层市场基准: 行业没被表覆盖 (或覆盖了但整块没填值) 时使用"""
+    return _load_industry_doc().get("fallback", {})
 
 
 def _is_live_industry(cfg) -> bool:
@@ -89,17 +121,19 @@ def resolve_industry_key(hard_tags) -> str:
     return ""
 
 
-def _load_industry_thresholds(industry: str) -> dict | None:
+def _load_industry_thresholds(industry: str) -> dict:
+    """该行业生效的阈值字典 —— 命中不了就回退到顶层 fallback (而不是空字典)。
+
+    行业不在表里、或表里有这个键但整块没填值 (`_is_live_industry` 为假,
+    如被重复键覆盖成 `{}` 的 `房地产开发`) 时, 用市场基准而不是 `{}`。
+    返回 `{}` 会让调用方误以为"这个行业没有任何阈值", 从而悄悄落到
+    `_get_ind_threshold` 的硬编码通用默认值上 —— 「没配置」不等于「没有约束」。
+    """
     table = _load_industry_table()
     cfg = table.get(industry)
     if _is_live_industry(cfg):
         return cfg
-    # 注意: 这里本来想退回 yaml 里的 `fallback` 市场基准 —— 但 _INDUSTRY_CACHE
-    # 装的是 `industries` 子字典, 在它上面取 "fallback" 永远是空。也就是说
-    # 那 14 个 fallback 阈值从来没被读过, 全部公司都落在 _get_ind_threshold 的
-    # 通用默认值上。这是已确认的缺陷, 会改变 83.8% 公司的阈值和 B+ 判定,
-    # 所以不跟本轮改名一起改, 单独一轮处理。
-    return {}
+    return _load_industry_fallback()
 
 
 def _get_ind_threshold(
@@ -151,6 +185,55 @@ def _detect_size(financials: FinancialStatement | None) -> str:
         return "中型"
     else:
         return "小型"
+
+
+# ───────────────────────────────────────────────
+# B+ 权重表 (config/bplus_weights.yaml)
+# 与 industry_thresholds 是两套独立配置: 那张表管"多低算异常" (阈值),
+# 这张表管"异常了扣多重" (severity 加权与天花板)。
+# ───────────────────────────────────────────────
+
+def _load_bplus_weights_doc() -> dict:
+    """bplus_weights.yaml 的整份文档, 只读一次。
+
+    与 industry_thresholds 一样缓存**整份文档**而不是子字典 —— 顶层还有 `version`
+    这类元数据, 缓存子字典会在下次加顶层键时又丢一次 (别重蹈 _load_industry_doc 的覆辙)。
+    """
+    global _BPLUS_WEIGHTS_DOC_CACHE
+    if _BPLUS_WEIGHTS_DOC_CACHE is None:
+        if not BPLUS_WEIGHTS_PATH.exists():
+            logger.warning("B+ 权重表不存在: %s —— 所有检查将退回旧行为", BPLUS_WEIGHTS_PATH)
+            _BPLUS_WEIGHTS_DOC_CACHE = {}
+        else:
+            with open(BPLUS_WEIGHTS_PATH, encoding="utf-8") as f:
+                _BPLUS_WEIGHTS_DOC_CACHE = yaml.safe_load(f) or {}
+    return _BPLUS_WEIGHTS_DOC_CACHE
+
+
+def load_bplus_weights() -> dict[str, dict]:
+    """B+ 自己的权重表: {检查名: {category, base_weight, direction, amplification_cap}}
+
+    先校验结构再返回 —— `direction` 是配置断言 (本轮不参与行为), 但断言的前提
+    是它真的存在且取值合法, 否则将来加正向检查时会静默错向。
+    """
+    checks = _load_bplus_weights_doc().get("checks") or {}
+    for name, cfg in checks.items():
+        if not isinstance(cfg, dict):
+            raise ValueError(f"B+ 权重表 {name!r} 不是一个映射: {cfg!r}")
+        missing = [f for f in _REQUIRED_FIELDS if cfg.get(f) is None]
+        if missing:
+            raise ValueError(f"B+ 权重表 {name!r} 缺字段: {missing}")
+        if cfg["direction"] not in _DIRECTIONS:
+            raise ValueError(
+                f"B+ 权重表 {name!r} 的 direction={cfg['direction']!r} 非法, "
+                f"只允许 {_DIRECTIONS}"
+            )
+    return checks
+
+
+def _check_weight_config(check_name: str) -> dict | None:
+    """该检查在权重表里的配置; 没配置返回 None (调用方保持旧行为)"""
+    return load_bplus_weights().get(check_name)
 
 
 # ═══════════════════════════════════════════════
@@ -518,28 +601,104 @@ def calc_risk_level(
 # 严重度
 # ═══════════════════════════════════════════════
 
-def _calc_dual_high_severity(product: float) -> float:
-    if product > 0.30: return 5.0
+def _calc_dual_high_severity(product: float, cap: float = 5.0) -> float:
+    """存贷双高曲线。
+
+    分界点 (0.10 / 0.30) 与斜率原样保留 —— 它们是这条曲线的语义。
+    唯一改动: 顶上写死的 5.0 换成调用方给的 `cap` (该检查自己的
+    amplification_cap)。三个分支在 product=0.30 处连续 (2.0+3.0=5.0)。
+    """
+    if product > 0.30: return cap
     elif product > 0.10: return 2.0 + (product - 0.10) / 0.20 * 3.0
     else: return max(0.5, product / 0.10 * 2.0)
+
+
+def _curve_cap(check_name: str) -> float:
+    """曲线内部的上限 = 该检查自己的 amplification_cap。
+
+    没配置的检查 (含 calc_severity 的别名 `净现比`/`存贷双高`/`母子资金分离度`,
+    以及权表里根本没有的名字) 退回旧的硬编码 5.0, 即旧行为。
+    """
+    cfg = _check_weight_config(check_name)
+    if cfg and cfg.get("amplification_cap") is not None:
+        return float(cfg["amplification_cap"])
+    return 5.0
+
+
+def apply_check_weight(check_name: str, raw_severity: float) -> float:
+    """severity_final = clamp(raw_severity x base_weight, 0.0, amplification_cap)
+
+    未配置的检查**保持旧行为** (原样返回 raw_severity) 并记 warning。
+    这里刻意不返回 0: 「没配置」不等于「不扣分」—— 悄悄归零会让一条真实异常
+    凭空消失, 而且消失得无声无息。
+
+    `direction` 不在本函数里分支: B+ 目前只有负向检查, 钳下界 0 是安全的。
+    ⚠️ 加正向检查时 **必须** 让 direction 真的参与行为, 见 bplus_weights.yaml 注释。
+    """
+    cfg = _check_weight_config(check_name)
+    if cfg is None:
+        logger.warning(
+            "B+ 权重表 %s 未配置检查 %r —— 保持旧行为 (raw=%.4f, 不加权/不钳位)",
+            BPLUS_WEIGHTS_PATH, check_name, raw_severity,
+        )
+        return raw_severity
+    weight = float(cfg["base_weight"])
+    cap = float(cfg["amplification_cap"])
+    return max(0.0, min(raw_severity * weight, cap))
+
+
+def calc_internal_control_severity(missing_count: int) -> float:
+    """内控体系那一档的 severity —— **不走** calc_severity 的曲线。
+
+    run_internal_control_check 用「缺失项计数」(0-4) 分级而不是连续曲线,
+    所以把它原样当 raw, 再套该检查自己的 base_weight / amplification_cap
+    (当前 1.0 / 3.0 -> 实际就是 min(count, 3.0))。
+    参数留在 yaml 里而不是写死在函数里, 调整力度不用改代码。
+    """
+    return apply_check_weight("内控体系", float(missing_count))
 
 
 def calc_severity(
     check_name: str, value: float, total_assets: float = 0,
     industry: str | None = None, financials: FinancialStatement | None = None,
 ) -> float:
-    """E1 层调用"""
+    """E1 层调用
+
+    两步, 次序不能反:
+      1. 该检查自己的**曲线**算出 raw —— 分界点与斜率是语义, 一律不动,
+         只把曲线里写死的上限 5.0 换成该检查自己的 amplification_cap;
+      2. 曲线输出之后乘 base_weight, 再钳到 [0, amplification_cap]。
+
+    第 2 步让「扣分力度」与「曲线形状」解耦: 两条曲线 raw 恰好相同
+    (如 过度扩张嫌疑 与 利润含金量异常 都顶到 raw=5.0) 时, E1 拿到的 W_phe
+    不再完全一样 —— 这正是本次接线的目的。
+
+    `direction` 目前只作配置断言 (B+ 全是负向检查), 不参与行为。
+    """
+    cap = _curve_cap(check_name)
+
     if check_name in ("净现比", "利润含金量异常"):
-        if value < 0: return 5.0
-        nc_p25 = _get_ind_threshold(industry, "net_profit_cash_ratio_p25", 0.25, financials)
-        if value >= nc_p25: return 0.0
-        return min(5.0, (nc_p25 - value) / max(nc_p25 * 0.3, 0.05) * 3)
-    if check_name in ("存贷双高", "资金结构异常"):
-        return _calc_dual_high_severity(value)
-    if check_name in ("母子资金分离度", "资金管控异常"):
-        if value > 0.30: return 5.0
-        if value > 0.15: return 3.0
-        return max(0.0, value / 0.15 * 1.5)
-    if check_name in ("过度扩张嫌疑", "过度投资风险", "民企扩张风险", "销售现金背离"):
-        return min(5.0, max(1.5, abs(value) * 8))
-    return 0.0
+        if value < 0:
+            raw = cap
+        else:
+            nc_p25 = _get_ind_threshold(industry, "net_profit_cash_ratio_p25", 0.25, financials)
+            if value >= nc_p25:
+                raw = 0.0
+            else:
+                raw = min(cap, (nc_p25 - value) / max(nc_p25 * 0.3, 0.05) * 3)
+    elif check_name in ("存贷双高", "资金结构异常"):
+        raw = _calc_dual_high_severity(value, cap)
+    elif check_name in ("母子资金分离度", "资金管控异常"):
+        if value > 0.30: raw = cap
+        elif value > 0.15: raw = min(3.0, cap)
+        else: raw = max(0.0, value / 0.15 * 1.5)
+    elif check_name in ("过度扩张嫌疑", "过度投资风险", "民企扩张风险", "销售现金背离"):
+        raw = min(cap, max(1.5, abs(value) * 8))
+    else:
+        logger.warning(
+            "calc_severity 没有检查 %r 的曲线 (权重表里也查不到) —— 返回 0.0 (旧行为)",
+            check_name,
+        )
+        return 0.0
+
+    return apply_check_weight(check_name, raw)

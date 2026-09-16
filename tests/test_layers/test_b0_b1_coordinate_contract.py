@@ -258,7 +258,7 @@ def extract_with(b0):
         guide = b0.run_semantic_guide(_doc())
         assert guide.tables, "B0 没产出任何 TableGuide"
         from layers.layer_b_extract.b1_extractors import run_extraction
-        fin, _parent = run_extraction(_doc(), guide)
+        fin, _parent, _prior = run_extraction(_doc(), guide)
         return {k: v.value for k, v in fin.balance_sheet.items()}
     return run
 
@@ -281,7 +281,7 @@ def extract_dated(b0):
         guide = b0.run_semantic_guide(_doc_dated())
         assert guide.tables, "B0 没产出任何 TableGuide"
         from layers.layer_b_extract.b1_extractors import run_extraction
-        fin, _parent = run_extraction(_doc_dated(), guide)
+        fin, _parent, _prior = run_extraction(_doc_dated(), guide)
         return {k: v.value for k, v in fin.balance_sheet.items()}
     return run
 
@@ -418,7 +418,7 @@ class TestB1RejectsTheWrongPeriodColumn:
             g = b0.run_semantic_guide(_doc())
             for fm in g.tables[0].field_mappings:
                 fm.col_index = 2          # 期初余额列
-            fin, _p = run_extraction(_doc(), g)
+            fin, _p, _prior = run_extraction(_doc(), g)
             return {k: v.value for k, v in fin.balance_sheet.items()}
         return run
 

@@ -46,6 +46,10 @@ class PipelineContext:
     # B 层
     financials: Optional[FinancialStatement] = None
     parent_financials: Optional[FinancialStatement] = None
+    # 上期(比较期)报表 —— 与 financials 同一张表的上一期列。
+    # 不是 parent_financials (同期母公司), 也不是 multi_year_financials (同行多年数据)。
+    # 供 B+ 的 Beneish M-Score 取上期 12 个字段用。
+    prior_financials: Optional[FinancialStatement] = None
     validation_passed: bool = False
 
     # B+ 层

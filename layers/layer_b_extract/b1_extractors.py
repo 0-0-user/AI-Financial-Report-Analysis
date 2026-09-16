@@ -37,19 +37,29 @@ def _pick_rows(
     return []
 
 
-def run_extraction(raw_doc: RawDocument, guide: B0Guide) -> tuple[FinancialStatement, FinancialStatement]:
+def run_extraction(
+    raw_doc: RawDocument, guide: B0Guide,
+) -> tuple[FinancialStatement, FinancialStatement, FinancialStatement]:
     """根据 B0 指引定位取数，支持行式和列式表格
 
-    合并报表（financials，供 B/C/D/E 分析）与母公司报表（parent_financials，
-    供 B+ 母子资金分离度）分别提取，两者彻底分离。
+    合并报表（financials，供 B/C/D/E 分析）、母公司报表（parent_financials，
+    供 B+ 母子资金分离度）与**上期报表**（prior_financials，供 B+ 的
+    Beneish M-Score 等跨期检测）各提取一份，三者彻底分离：
+
+      - 母公司报表是**同一期**的另一张报表, 不是上期;
+      - 上期报表是**同一张报表**的上一期列, 不是另一家公司/另一年度的外部数据。
 
     Returns:
-        (financials, parent_financials) — 合并报表 + 母公司报表各一份
+        (financials, parent_financials, prior_financials)
+        — 合并报表 + 母公司报表 + 上期(比较期)合并报表
     """
     financials: dict[str, dict[str, FinancialField]] = {
         "balance_sheet": {}, "income_statement": {}, "cashflow": {},
     }
     parent: dict[str, dict[str, FinancialField]] = {
+        "balance_sheet": {}, "income_statement": {}, "cashflow": {},
+    }
+    prior: dict[str, dict[str, FinancialField]] = {
         "balance_sheet": {}, "income_statement": {}, "cashflow": {},
     }
 
@@ -98,18 +108,35 @@ def run_extraction(raw_doc: RawDocument, guide: B0Guide) -> tuple[FinancialState
         use_parent=True,
     )
 
+    # 上期(比较期)报表: **同一批行、同一批科目**, 取上期列那一格。
+    # 走同一套提取函数 —— 期间只是个取列参数, 不是另一套取数逻辑,
+    # 否则两期的字段口径会漂移。
+    prior["balance_sheet"], prior["income_statement"], prior["cashflow"] = _extract_all_known_fields(
+        raw_doc, guide,
+        prior["balance_sheet"], prior["income_statement"], prior["cashflow"],
+        period=_PERIOD_PRIOR,
+    )
+    prior["balance_sheet"], prior["income_statement"], prior["cashflow"] = _extract_key_totals(
+        raw_doc, guide,
+        prior["balance_sheet"], prior["income_statement"], prior["cashflow"],
+        use_parent=False, period=_PERIOD_PRIOR,
+    )
+    # 不做 _cross_validate_and_fix: 它会在缺一个字段时**推算**出第三个,
+    # 上期报表里凭空多一个推出来的数, 比缺字段更糟。
+
     company_name = raw_doc.company_overview.company_name or ""
     stock_code = raw_doc.company_overview.stock_code or ""
     report_year = raw_doc.metadata.report_year or 0
 
     def _build(
         bs: dict, pl: dict, cf: dict, report_type: str,
+        validation: ValidationResult | None = None, year: int | None = None,
     ) -> FinancialStatement:
         return FinancialStatement(
             company_name=company_name, stock_code=stock_code,
-            year=report_year, report_type=report_type,
+            year=report_year if year is None else year, report_type=report_type,
             balance_sheet=bs, income_statement=pl, cashflow=cf,
-            validation=ValidationResult(is_valid=True, checks=[]),
+            validation=validation or ValidationResult(is_valid=True, checks=[]),
         )
 
     main = _build(
@@ -120,7 +147,18 @@ def run_extraction(raw_doc: RawDocument, guide: B0Guide) -> tuple[FinancialState
         parent["balance_sheet"], parent["income_statement"], parent["cashflow"],
         "母公司报表",
     )
-    return main, parent_fs
+    # 上期报表**不做**勾稽校验 —— 于是 is_valid 不能报 True:
+    # 那不是"校验通过", 是"根本没校验", 两者混在一个字段里就是伪装。
+    prior_fs = _build(
+        prior["balance_sheet"], prior["income_statement"], prior["cashflow"],
+        "上期合并报表",
+        validation=ValidationResult(
+            is_valid=False, checks=[],
+            error_message="上期(比较期)报表不做勾稽校验",
+        ),
+        year=report_year - 1 if report_year else 0,
+    )
+    return main, parent_fs, prior_fs
 
 
 # ═══════════════════════════════════════════════
@@ -306,6 +344,40 @@ def _current_period_cell(columns: dict, table_guide) -> Optional[str]:
     return _find_numeric_column(columns, prior)
 
 
+# 取哪一期的格子: 本期(期末) 还是上期(期初)
+_PERIOD_CURRENT = "current"
+_PERIOD_PRIOR = "prior"
+
+
+def _period_cell(columns: dict, table_guide, period: str) -> Optional[str]:
+    """按期间语义取这一行的那一格。period 只认 _PERIOD_CURRENT / _PERIOD_PRIOR。
+
+    期间是**取列的参数**, 不该在调用点各写一份取列逻辑 —— 两份逻辑迟早会
+    漂移成两个口径。
+    """
+    if period == _PERIOD_PRIOR:
+        return _prior_period_cell(columns, table_guide)
+    return _current_period_cell(columns, table_guide)
+
+
+def _prior_period_cell(columns: dict, table_guide) -> Optional[str]:
+    """这一行里**上期/期初**那一格的值。
+
+    与 _current_period_cell 严格对称, 但**不设字典序兜底**:
+    认不出哪一列是上期时返回 None, 而不是硬挑一格。
+
+    理由和"丢字段"相反 —— 上期格取成本期, 算出来的同比恒等于 0,
+    报表上看起来"没有增长", 比缺值更难发现。不知道就不取。
+    """
+    for col in getattr(table_guide, "columns", None) or []:
+        if col.standard_name not in _PRIOR_PERIOD_STANDARD_NAMES:
+            continue
+        v = columns.get(f"col_{col.index}", "")
+        if v and not _is_note_ref(v):
+            return v
+    return None
+
+
 def _extract_value_fallback(
     rows: list[RawTableRow], fm: FieldMapping, guide,
 ) -> Optional[float]:
@@ -458,6 +530,16 @@ def _unit_to_multiplier(unit: str) -> Decimal:
 _ALL_KNOWN_FIELDS: list[dict] | None = None
 
 
+# 「上期列」类字段: 报表里**没有**这个科目行, 值就在同一行的上期列里。
+#   期初未分配利润 = 「未分配利润」行的期初(上年末)数。
+# 按行名匹配 (期初未分配利润 / 年初未分配利润) 是 0 命中 —— 真实报表里
+# 根本没有这两行, 科目名也不会带上"期初"两个字 (表头才写"期初")。
+# 键 = 标准字段名, 值 = 该行在报表里的**科目名候选** (取当期字段那一套)。
+_PRIOR_COLUMN_FIELDS: dict[str, list[str]] = {
+    "Retained_Earnings_Begin": ["未分配利润", "期末未分配利润"],
+}
+
+
 def _load_all_known_fields() -> list[dict]:
     import yaml
     from pathlib import Path
@@ -477,7 +559,9 @@ def _load_all_known_fields() -> list[dict]:
     return _ALL_KNOWN_FIELDS
 
 
-def _extract_all_known_fields(raw_doc, guide, bs, pl, cf):
+def _extract_all_known_fields(
+    raw_doc, guide, bs, pl, cf, period: str = _PERIOD_CURRENT,
+):
     from decimal import Decimal, ROUND_HALF_UP
     all_known = _load_all_known_fields()
     all_rows = []
@@ -496,26 +580,30 @@ def _extract_all_known_fields(raw_doc, guide, bs, pl, cf):
         std_name = field_info["standard_name"]
         if std_name in existing:
             continue
+        # 期初类字段: 按**当期科目的行**找行, 但取上期列那一格。
+        prior_column = std_name in _PRIOR_COLUMN_FIELDS
+        if prior_column and period == _PERIOD_PRIOR:
+            # 上期报表里没有"上期的上期"那一列 —— 硬取会把它写成上期自己
+            # 的期末数, 一个看起来合理、其实错了一年的数。
+            continue
+        variants = _PRIOR_COLUMN_FIELDS.get(std_name, field_info["variants"])
         for source_type, row in all_rows:
             row_text = " ".join(str(v) for v in row.columns.values())
             if _is_sub_item_row(row_text):
                 continue
-            matched = any(v in row_text for v in field_info["variants"])
+            matched = any(v in row_text for v in variants)
             if not matched:
                 continue
-            val_str = None
-            for val in row.columns.values():
-                if _is_note_ref(val):
-                    continue
-                cleaned = str(val).replace(",", "").replace(" ", "").replace("%", "")
-                if cleaned and any(c.isdigit() for c in cleaned):
-                    val_str = str(val)
-                    break
-            if not val_str:
-                continue
-            try:
-                value = float(val_str.replace(",", "").replace(" ", "").replace("%", "").replace("(", "-").replace(")", ""))
-            except ValueError:
+            # 取哪一格按**表头给的期间语义**来定。旧写法是"字典序第一个像
+            # 数字的格" —— col_1 恰好是附注列 / 期初列时, 取到的就是
+            # 附注号或去年的数, 而且因为字段"已存在", 后面再没人纠正它。
+            table_guide = _table_guide_for(guide, source_type, use_parent=False)
+            val_str = (
+                _prior_period_cell(row.columns, table_guide) if prior_column
+                else _period_cell(row.columns, table_guide, period)
+            )
+            value = _parse_number(val_str) if val_str else None
+            if value is None:
                 continue
             if multiplier != 1:
                 value = value * multiplier
@@ -552,14 +640,18 @@ _KEY_TOTALS: list[tuple[str, str, list[str]]] = [
 ]
 
 
-def _extract_key_totals(raw_doc, guide, bs, pl, cf, use_parent: bool = False):
+def _extract_key_totals(
+    raw_doc, guide, bs, pl, cf, use_parent: bool = False,
+    period: str = _PERIOD_CURRENT,
+):
     """对关键合计字段做精确科目名提取，缺失时补上
 
-    用"科目列(col_0)精确等于候选名 + 取本期数值列"，
+    用"科目列(col_0)精确等于候选名 + 取该期数值列"，
     避免 B0 漏映射或子串匹配误命中"流动负债合计"等细分行。
-    本期列由表头的期间语义定（见 _current_period_cell）——
-    不是写死的 col_2。
+    取哪一列由表头的期间语义定（见 _current_period_cell / _prior_period_cell）
+    —— 不是写死的 col_2。
     use_parent=True 时对母公司报表桶提取（供 B+ 母子资金分离度）。
+    period=_PERIOD_PRIOR 时取上期列, 用来填 prior_financials。
     """
     from decimal import Decimal, ROUND_HALF_UP
     fd = raw_doc.financial_data
@@ -583,7 +675,7 @@ def _extract_key_totals(raw_doc, guide, bs, pl, cf, use_parent: bool = False):
             col0 = str(row.columns.get("col_0", "")).strip()
             if col0 not in variants:
                 continue
-            val_str = _current_period_cell(row.columns, table_guide)
+            val_str = _period_cell(row.columns, table_guide, period)
             value = _parse_number(val_str) if val_str else None
             if value is not None:
                 target_map[source][std_name] = FinancialField(
@@ -592,6 +684,23 @@ def _extract_key_totals(raw_doc, guide, bs, pl, cf, use_parent: bool = False):
                     original_unit=overall_unit, report_type=report_type,
                 )
                 added += 1
+            # 上期营收: A 股利润表里**没有**「上期营业收入」这一行
+            # (config/financial_fields.yaml:32-41 那四个候选名, 7 份真实
+            # 报告 0 命中) —— 上期营收就在**同一行的上期列**里。
+            # 取到了当期行的坐标, 就顺手取同一行的上期格。
+            # 只写**当期**那一遍: 上期报表里没有"上期的上期"列, 硬写会
+            # 把上期营收填成上期自己的数, 同比又恒等于 0。
+            if std_name == "Revenue_Total" and period == _PERIOD_CURRENT:
+                prior_str = _prior_period_cell(row.columns, table_guide)
+                prior_value = _parse_number(prior_str) if prior_str else None
+                # 上期格存在但解析不出数 (空/横杠/文字) 时**不写入** ——
+                # 宁缺勿错: 一个错的同比会让下游判成"没有增长"。
+                if prior_value is not None:
+                    target_map[source]["Revenue_Prior_Year"] = FinancialField(
+                        standard_name="Revenue_Prior_Year", raw_name="上期营业收入",
+                        value=float(Decimal(str(prior_value)).quantize(money_quantize, rounding=ROUND_HALF_UP)),
+                        original_unit=overall_unit, report_type=report_type,
+                    )
             break
     if added:
         logger.info(f"关键合计字段精确提取: 新增 {added} 个")

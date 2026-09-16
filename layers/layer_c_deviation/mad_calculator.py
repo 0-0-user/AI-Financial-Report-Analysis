@@ -294,14 +294,7 @@ def run_deviation_analysis(
 
     for indicator, peer_median in benchmark.peer_median.items():
         # 通过公式桥接计算实际值（从财务原始数据计算比率）
-        formula_info = _BENCHMARK_TO_FINANCIAL_FORMULA.get(indicator)
-        if formula_info and formula_info.get("formula"):
-            actual = formula_info["formula"](financials)
-            display_name = formula_info["name"]
-        else:
-            # 兜底：直接尝试字段匹配
-            actual = _get_field_value(financials, indicator)
-            display_name = indicator
+        actual, display_name = _resolve_actual(financials, indicator)
 
         if actual is None:
             logger.debug(f"  {indicator}({display_name}): 无法从财务数据计算")
@@ -360,15 +353,11 @@ def run_deviation_analysis(
     # 时序突变补充
     if historical:
         for indicator, hist_vals in historical.items():
-            actual = _get_field_value(financials, indicator)
+            actual, display_name = _resolve_actual(financials, indicator)
             if actual is None or len(hist_vals) < 4:
                 continue
-            ta = detect_temporal_anomaly(indicator, actual, hist_vals)
+            ta = detect_temporal_anomaly(display_name, actual, hist_vals)
             if ta:
-                # 替换为中文名
-                formula_info = _BENCHMARK_TO_FINANCIAL_FORMULA.get(indicator)
-                if formula_info:
-                    ta.indicator = f"{formula_info['name']}(时序突变)"
                 anomalies.append(ta)
 
     return anomalies
@@ -425,7 +414,22 @@ _BENCHMARK_TO_FINANCIAL_FORMULA: dict[str, dict] = {
             else None
         ),
     },
-    # YYZSRGDHBZC (营收增长率) 需要跨年数据，暂跳过
+    "YYZSRGDHBZC": {  # 营业收入同比增长率(%) = (本期营收 - 上期营收) / 上期营收 * 100
+        # 上期营收取自**上期列**: A 股利润表没有「上期营业收入」这一行,
+        # B1 在同一行的上期列里取, 存成 Revenue_Prior_Year。
+        # 这里原先写的是「需要跨年数据，暂跳过」—— 于是 A2 把 YYZSRGDHBZC
+        # 放进 peer_median, C 层却永远静默少判一个指标。
+        "name": "营业收入同比增长率",
+        "formula": lambda fs: (
+            (_get_field_value(fs, "Revenue_Total")
+             - _get_field_value(fs, "Revenue_Prior_Year"))
+            / _get_field_value(fs, "Revenue_Prior_Year") * 100
+            if _get_field_value(fs, "Revenue_Total") is not None
+            and _get_field_value(fs, "Revenue_Prior_Year") is not None
+            and _get_field_value(fs, "Revenue_Prior_Year") != 0
+            else None
+        ),
+    },
     "ROEJQ": {  # 净资产收益率(%) = 净利润 / 所有者权益 * 100
         "name": "净资产收益率",
         "formula": lambda fs: (
@@ -444,6 +448,25 @@ def _get_field_value(financials: FinancialStatement, field: str) -> Optional[flo
         if field in stmt:
             return stmt[field].value
     return None
+
+
+def _resolve_actual(
+    financials: FinancialStatement, indicator: str,
+) -> tuple[Optional[float], str]:
+    """基准键 -> (实际值, 展示名)
+
+    基准里的键是东方财富的指标代码 (XSMLL 等)，财务数据里是英文字段名，
+    靠 `_BENCHMARK_TO_FINANCIAL_FORMULA` 搭桥。
+
+    截面循环和时序循环**必须走同一座桥**。曾经时序那段自己写了
+    `_get_field_value(financials, "XSMLL")` —— 拿东财代码查英文字段，
+    永远查不到，于是 historical 分支整个是死代码 (每个指标都 continue)。
+    两处各写一份取数逻辑，迟早漂移成"截面能判、时序判不了"。
+    """
+    info = _BENCHMARK_TO_FINANCIAL_FORMULA.get(indicator)
+    if info and info.get("formula"):
+        return info["formula"](financials), info["name"]
+    return _get_field_value(financials, indicator), indicator
 
 
 def _get_peer_values(benchmark: Benchmark, indicator: str) -> list[float]:

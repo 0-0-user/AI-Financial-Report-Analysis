@@ -48,7 +48,7 @@ def run(ctx: PipelineContext) -> None:
     # 扩展检测
     try:
         from .fraud_patterns import run_extended_checks
-        all_anomalies.extend(run_extended_checks(ctx.financials))
+        all_anomalies.extend(run_extended_checks(ctx.financials, ctx.prior_financials))
     except ImportError:
         pass
     tracer.milestone("B+", "三步+扩展检查", "success", f"{len(all_anomalies)} 项异常")
